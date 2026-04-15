@@ -4,34 +4,37 @@ Initialise tous les composants, gère la reprise de session au démarrage
 et fait tourner l'icône tray en arrière-plan.
 """
 
+import ctypes
 import tkinter as tk
 
 import pystray
-from PIL import Image, ImageDraw
 
 from .app import App
 from .database import Database
+from .icon import create_icon
 from .idle_detector import IdleDetector
 from .notifier import Notifier
+from .overlay import Overlay
 from .reminder import Reminder
 from .task_manager import TaskManager
 from .timer_engine import TimerEngine
 
 
 # ------------------------------------------------------------------
-# Icône tray générée dynamiquement (cercle coloré)
+# Identification de l'application pour la barre des tâches Windows
 # ------------------------------------------------------------------
 
-def _build_tray_icon() -> Image.Image:
-    """Crée une icône 64×64 pour le system tray."""
-    size = 64
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    # Fond circulaire bleu
-    draw.ellipse([4, 4, size - 4, size - 4], fill="#2563eb")
-    # Symbole ▶ centré
-    draw.polygon([(24, 18), (24, 46), (48, 32)], fill="white")
-    return img
+def _set_app_id() -> None:
+    """
+    Déclare un AppUserModelID unique pour que Windows regroupe toutes les fenêtres
+    de TimeTrackR sous la même icône dans la barre des tâches.
+    """
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "DevBooster.TimeTrackR.1.0"
+        )
+    except Exception:
+        pass
 
 
 # ------------------------------------------------------------------
@@ -42,6 +45,8 @@ class TimeTrackRApp:
     """Orchestre tous les composants de l'application."""
 
     def __init__(self):
+        _set_app_id()
+
         # --- Couche persistance ---
         self._db = Database()
 
@@ -67,7 +72,7 @@ class TimeTrackRApp:
         if self._db.get_config("reminder_enabled", "1") != "1":
             self._reminder.disable()
 
-        # --- Fenêtre principale (créée mais non affichée) ---
+        # --- Fenêtre principale (cachée au démarrage) ---
         self._app = App(
             task_manager=self._task_manager,
             timer_engine=self._timer,
@@ -75,10 +80,18 @@ class TimeTrackRApp:
             on_new_task_requested=self._show_window,
             on_quit_requested=self._quit,
         )
-        # Écoute les changements de paramètres (émis par SettingsWindow après sauvegarde)
         self._app.bind("<<SettingsChanged>>", self._on_settings_changed)
 
-        # --- Icône tray (construite ici, démarrée dans run()) ---
+        # --- Overlay (créé ici, affiché après mainloop) ---
+        self._overlay = Overlay(
+            parent=self._app,
+            task_manager=self._task_manager,
+            timer_engine=self._timer,
+            database=self._db,
+            on_open_main=self._show_window,
+        )
+
+        # --- Icône tray ---
         self._tray_icon = self._build_tray()
 
     # ------------------------------------------------------------------
@@ -86,10 +99,7 @@ class TimeTrackRApp:
     # ------------------------------------------------------------------
 
     def _check_resumable_session(self) -> None:
-        """
-        Vérifie s'il existe une session non terminée.
-        Affiche un dialog de reprise si c'est le cas.
-        """
+        """Vérifie s'il existe une session non terminée et propose la reprise."""
         session = self._task_manager.get_resumable_session()
         if session is None:
             return
@@ -106,6 +116,7 @@ class TimeTrackRApp:
         if reponse:
             self._task_manager.resume_last_session(session)
             self._app.restore_running_state(session["name"], session["project"])
+            self._overlay.notify_task_list_changed()
         else:
             self._task_manager.discard_last_session(session)
 
@@ -114,7 +125,7 @@ class TimeTrackRApp:
     # ------------------------------------------------------------------
 
     def _build_tray(self) -> pystray.Icon:
-        """Construit et retourne l'icône tray avec son menu contextuel."""
+        """Construit l'icône tray avec l'icône chronomètre partagée."""
         menu = pystray.Menu(
             pystray.MenuItem("Ouvrir TimeTrackR", self._show_window, default=True),
             pystray.MenuItem("Paramètres", self._show_settings),
@@ -124,16 +135,17 @@ class TimeTrackRApp:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quitter", self._quit),
         )
+        # Utilisation de la même icône chronomètre que les fenêtres
         icon = pystray.Icon(
             "TimeTrackR",
-            _build_tray_icon(),
+            create_icon(64),
             "TimeTrackR — En attente",
             menu,
         )
         return icon
 
     def _update_tray_tooltip(self) -> None:
-        """Met à jour le tooltip de l'icône avec la tâche et le temps écoulé."""
+        """Met à jour le tooltip de l'icône tray."""
         if self._timer.is_running:
             task, _ = self._timer.current_task
             elapsed = TimerEngine.format_elapsed(self._timer.elapsed_seconds)
@@ -147,7 +159,7 @@ class TimeTrackRApp:
     # ------------------------------------------------------------------
 
     def _show_window(self, icon=None, item=None) -> None:
-        """Affiche la fenêtre principale (depuis n'importe quel thread)."""
+        """Affiche la fenêtre principale."""
         self._app.after(0, self._app.show)
 
     def _show_settings(self, icon=None, item=None) -> None:
@@ -155,20 +167,17 @@ class TimeTrackRApp:
         self._app.after(0, self._app.open_settings)
 
     def _tray_toggle_pause(self, icon=None, item=None) -> None:
-        """Bascule pause/reprise depuis le menu tray."""
         self._timer.toggle_pause()
 
     def _tray_stop(self, icon=None, item=None) -> None:
-        """Arrête la tâche courante depuis le menu tray."""
         self._task_manager.stop_task()
         self._app.after(0, self._app._on_stop)
+        self._app.after(0, self._overlay.on_task_stopped)
 
     def _quit(self, icon=None, item=None) -> None:
-        """Fermeture propre : sauvegarde finale, arrêt du timer, fin de Tkinter."""
+        """Fermeture propre : sauvegarde finale, arrêt du timer, destruction Tkinter."""
         if self._timer.is_running:
             self._timer.stop()
-        # Détruire la fenêtre Tkinter depuis son thread (via after) pour
-        # que mainloop() se termine proprement, puis pystray est stoppé dans run()
         self._app.after(0, self._app.destroy)
 
     # ------------------------------------------------------------------
@@ -176,13 +185,16 @@ class TimeTrackRApp:
     # ------------------------------------------------------------------
 
     def _on_tick(self, elapsed: int, task_name: str, project: str) -> None:
-        """Reçoit chaque tick et propage vers l'UI et le tooltip tray."""
-        # Mise à jour de la fenêtre
+        """Propage le tick vers la fenêtre principale et l'overlay."""
         try:
             self._app.on_timer_tick(elapsed, task_name, project)
         except Exception:
             pass
-        # Mise à jour du tooltip toutes les 5 secondes pour éviter la surcharge
+        try:
+            self._overlay.on_timer_tick(elapsed, task_name, project)
+        except Exception:
+            pass
+        # Tooltip tray mis à jour toutes les 5 secondes
         if elapsed % 5 == 0:
             self._update_tray_tooltip()
 
@@ -191,7 +203,6 @@ class TimeTrackRApp:
     # ------------------------------------------------------------------
 
     def _on_idle(self, idle_seconds: float) -> None:
-        """Déclenché quand l'inactivité dépasse le seuil."""
         if not self._timer.is_running or self._timer.is_paused:
             return
         self._timer.pause()
@@ -202,23 +213,21 @@ class TimeTrackRApp:
         )
 
     def _resume_from_idle(self) -> None:
-        """L'utilisateur a cliqué 'Reprendre' dans la notification d'inactivité."""
         self._timer.resume()
         self._idle_detector.reset()
         self._app.after(0, lambda: self._app._update_button_states(running=True, paused=False))
 
     def _stop_from_idle(self) -> None:
-        """L'utilisateur a cliqué 'Arrêter' dans la notification d'inactivité."""
         self._task_manager.stop_task()
         self._idle_detector.reset()
         self._app.after(0, self._app._on_stop)
+        self._app.after(0, self._overlay.on_task_stopped)
 
     def _on_reminder(self, elapsed: int, task_name: str) -> None:
-        """Déclenché par le rappel de durée de tâche."""
         self._notifier.notify_reminder(
             task_name,
             elapsed,
-            on_continue=lambda: None,  # L'utilisateur continue : ne rien faire
+            on_continue=lambda: None,
             on_new_task=lambda: self._app.after(0, self._app._on_new_task),
         )
 
@@ -227,11 +236,7 @@ class TimeTrackRApp:
     # ------------------------------------------------------------------
 
     def _on_settings_changed(self, event=None) -> None:
-        """
-        Synchronise les modules périphériques avec les nouveaux paramètres.
-        SettingsWindow a déjà sauvegardé en base avant d'émettre cet événement,
-        donc on lit directement depuis la DB.
-        """
+        """Lit les nouveaux paramètres en base et les applique aux modules."""
         idle_enabled = self._db.get_config("idle_enabled", "1") == "1"
         idle_minutes = int(self._db.get_config("idle_minutes", "10"))
         reminder_enabled = self._db.get_config("reminder_enabled", "1") == "1"
@@ -255,22 +260,12 @@ class TimeTrackRApp:
 
     def run(self) -> None:
         """
-        Lance l'icône tray via run_detached() (thread interne géré par pystray)
-        puis démarre la boucle Tkinter dans le thread principal.
-        La vérification de session reprend se fait via after() une fois
-        que la boucle est active, pour éviter d'appeler des dialogs avant mainloop.
+        Lance le tray via run_detached() puis la boucle Tkinter dans le thread principal.
+        La session orpheline est vérifiée via after() une fois la boucle démarrée.
         """
-        # run_detached() démarre pystray dans son propre thread et rend l'icône
-        # visible via la fonction setup par défaut (visible = True)
         self._tray_icon.run_detached()
-
-        # Vérification de la session orpheline après que mainloop est démarrée
         self._app.after(200, self._check_resumable_session)
-
-        # Boucle Tkinter dans le thread principal (obligatoire sous Windows)
         self._app.mainloop()
-
-        # Nettoyage quand mainloop() se termine (suite à app.destroy())
         try:
             self._tray_icon.stop()
         except Exception:

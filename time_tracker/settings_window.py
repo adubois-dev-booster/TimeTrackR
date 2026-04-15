@@ -97,6 +97,10 @@ class SettingsWindow(ctk.CTkToplevel):
         # Centrer par rapport au parent
         self._center_on_parent()
 
+        # Icône partagée
+        from .icon import apply_icon_to_window
+        self.after(100, lambda: apply_icon_to_window(self))
+
         self._build_ui()
         self._load()
 
