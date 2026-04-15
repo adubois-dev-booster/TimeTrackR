@@ -1,12 +1,10 @@
 """
 Fenêtre principale de l'application (CustomTkinter).
-Se ferme dans le tray au lieu de quitter l'application.
+Se ferme dans le tray ou quitte selon le paramètre "close_to_tray".
 Toute mise à jour de l'UI depuis le thread timer passe par after().
 """
 
-import threading
 import tkinter as tk
-from datetime import datetime
 from typing import Callable
 
 import customtkinter as ctk
@@ -30,6 +28,7 @@ class App(ctk.CTk):
         timer_engine: TimerEngine,
         database: Database,
         on_new_task_requested: Callable | None = None,
+        on_quit_requested: Callable | None = None,
     ):
         super().__init__()
 
@@ -37,13 +36,17 @@ class App(ctk.CTk):
         self._timer = timer_engine
         self._db = database
         self._on_new_task_requested = on_new_task_requested
+        self._on_quit_requested = on_quit_requested
 
-        # Empêche la fermeture de tuer le processus — on masque dans le tray à la place
-        self.protocol("WM_DELETE_WINDOW", self._hide_to_tray)
+        # Référence vers la fenêtre paramètres (singleton)
+        self._settings_win = None
+
+        # Fermeture : vers tray ou quitter selon config
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_ui()
         self._refresh_today_sessions()
-        self._load_settings()
+        self._apply_theme()
 
     # ------------------------------------------------------------------
     # Construction de l'interface
@@ -52,9 +55,8 @@ class App(ctk.CTk):
     def _build_ui(self) -> None:
         """Construit tous les widgets de la fenêtre."""
         self.title("TimeTrackR")
-        self.geometry("480x720")
+        self.geometry("480x580")
         self.resizable(False, False)
-        self.minsize(480, 680)
 
         # ── En-tête ──────────────────────────────────────────────────
         header = ctk.CTkFrame(self, corner_radius=0)
@@ -65,12 +67,20 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=20, weight="bold"),
         ).pack(side="left", padx=16, pady=12)
 
+        # Bouton Paramètres
+        ctk.CTkButton(
+            header, text="⚙", width=36, height=28,
+            command=self.open_settings,
+            fg_color="transparent", hover_color=("gray80", "gray30"),
+        ).pack(side="right", padx=4, pady=10)
+
+        # Bouton Thème
         self._theme_btn = ctk.CTkButton(
             header, text="☀", width=36, height=28,
             command=self._toggle_theme,
             fg_color="transparent", hover_color=("gray80", "gray30"),
         )
-        self._theme_btn.pack(side="right", padx=8, pady=10)
+        self._theme_btn.pack(side="right", padx=4, pady=10)
 
         # ── Saisie de la tâche ────────────────────────────────────────
         form_frame = ctk.CTkFrame(self)
@@ -78,7 +88,6 @@ class App(ctk.CTk):
 
         ctk.CTkLabel(form_frame, text="Tâche", anchor="w").pack(fill="x", padx=8, pady=(8, 0))
 
-        # Champ tâche avec liste déroulante (autocomplétion)
         self._task_var = tk.StringVar()
         self._task_entry = ctk.CTkComboBox(
             form_frame,
@@ -154,7 +163,7 @@ class App(ctk.CTk):
 
         # ── Sessions du jour ─────────────────────────────────────────
         today_frame = ctk.CTkFrame(self)
-        today_frame.pack(fill="both", expand=True, padx=16, pady=(8, 4))
+        today_frame.pack(fill="both", expand=True, padx=16, pady=(8, 12))
 
         ctk.CTkLabel(
             today_frame, text="Aujourd'hui",
@@ -165,61 +174,12 @@ class App(ctk.CTk):
         self._sessions_scroll = ctk.CTkScrollableFrame(today_frame, height=140)
         self._sessions_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
-        # ── Paramètres de rappels ─────────────────────────────────────
-        settings_frame = ctk.CTkFrame(self)
-        settings_frame.pack(fill="x", padx=16, pady=(4, 12))
-
-        ctk.CTkLabel(
-            settings_frame, text="Paramètres rappels",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            anchor="w",
-        ).pack(fill="x", padx=12, pady=(10, 6))
-
-        # Rappel inactivité
-        idle_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        idle_row.pack(fill="x", padx=12, pady=2)
-
-        self._idle_enabled = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            idle_row, text="Rappel inactivité",
-            variable=self._idle_enabled,
-            command=self._save_settings,
-            width=160,
-        ).pack(side="left")
-
-        self._idle_minutes = tk.IntVar(value=10)
-        ctk.CTkLabel(idle_row, text="après").pack(side="left", padx=(8, 4))
-        ctk.CTkEntry(idle_row, textvariable=self._idle_minutes, width=48).pack(side="left")
-        ctk.CTkLabel(idle_row, text="min").pack(side="left", padx=4)
-
-        # Rappel durée de tâche
-        reminder_row = ctk.CTkFrame(settings_frame, fg_color="transparent")
-        reminder_row.pack(fill="x", padx=12, pady=(2, 10))
-
-        self._reminder_enabled = tk.BooleanVar(value=True)
-        ctk.CTkCheckBox(
-            reminder_row, text="Rappel durée tâche",
-            variable=self._reminder_enabled,
-            command=self._save_settings,
-            width=160,
-        ).pack(side="left")
-
-        self._reminder_minutes = tk.IntVar(value=60)
-        ctk.CTkLabel(reminder_row, text="tous les").pack(side="left", padx=(8, 4))
-        ctk.CTkEntry(reminder_row, textvariable=self._reminder_minutes, width=48).pack(side="left")
-        ctk.CTkLabel(reminder_row, text="min").pack(side="left", padx=4)
-
-        ctk.CTkButton(
-            settings_frame, text="Sauvegarder",
-            command=self._save_settings, width=120,
-        ).pack(anchor="e", padx=12, pady=(0, 10))
-
     # ------------------------------------------------------------------
     # Callbacks boutons
     # ------------------------------------------------------------------
 
     def _on_start(self) -> None:
-        """Démarre ou reprend le timer."""
+        """Démarre le timer pour la tâche saisie."""
         task_name = self._task_var.get().strip()
         project = self._project_var.get().strip()
         if not task_name:
@@ -228,7 +188,6 @@ class App(ctk.CTk):
         self._task_manager.start_task(task_name, project)
         self._update_button_states(running=True, paused=False)
         self._status_label.configure(text="En cours…", text_color=("#22c55e", "#4ade80"))
-        # Rafraîchir la liste des tâches récentes
         self._task_entry.configure(values=self._task_manager.get_recent_task_names())
         self._project_entry.configure(values=self._task_manager.get_recent_projects())
 
@@ -251,7 +210,7 @@ class App(ctk.CTk):
         self._refresh_today_sessions()
 
     def _on_new_task(self) -> None:
-        """Arrête la tâche courante et efface les champs pour une nouvelle saisie."""
+        """Arrête la tâche courante et vide les champs pour une nouvelle saisie."""
         if self._timer.is_running:
             self._task_manager.stop_task()
         self._task_var.set("")
@@ -261,23 +220,39 @@ class App(ctk.CTk):
         self._status_label.configure(text="En attente", text_color=("gray50", "gray60"))
         self._btn_pause.configure(text="⏸  Pause")
         self._refresh_today_sessions()
-        # Callback optionnel vers main.py pour ouvrir la fenêtre si elle est cachée
         if self._on_new_task_requested:
             self._on_new_task_requested()
+
+    # ------------------------------------------------------------------
+    # Paramètres (fenêtre séparée)
+    # ------------------------------------------------------------------
+
+    def open_settings(self) -> None:
+        """Ouvre la fenêtre des paramètres (singleton : une seule instance à la fois)."""
+        # Import local pour éviter la dépendance circulaire au niveau module
+        from .settings_window import SettingsWindow
+
+        if self._settings_win is not None and self._settings_win.winfo_exists():
+            self._settings_win.lift()
+            self._settings_win.focus_force()
+            return
+
+        # S'assurer que la fenêtre principale est visible (requis pour transient)
+        if not self.winfo_viewable():
+            self.deiconify()
+
+        self._settings_win = SettingsWindow(self, self._db)
 
     # ------------------------------------------------------------------
     # Mise à jour depuis le thread timer (via after())
     # ------------------------------------------------------------------
 
     def on_timer_tick(self, elapsed: int, task_name: str, project: str) -> None:
-        """
-        Appelé toutes les secondes depuis le thread timer.
-        Doit utiliser after() pour modifier les widgets depuis un autre thread.
-        """
-        self.after(0, self._update_timer_display, elapsed, task_name, project)
+        """Reçoit le tick du timer engine (autre thread) et délègue à after()."""
+        self.after(0, self._update_timer_display, elapsed)
 
-    def _update_timer_display(self, elapsed: int, task_name: str, project: str) -> None:
-        """Met à jour le label du timer (appelé dans le thread Tkinter)."""
+    def _update_timer_display(self, elapsed: int) -> None:
+        """Met à jour le label du timer (thread Tkinter uniquement)."""
         self._timer_label.configure(text=TimerEngine.format_elapsed(elapsed))
 
     # ------------------------------------------------------------------
@@ -286,7 +261,6 @@ class App(ctk.CTk):
 
     def _refresh_today_sessions(self) -> None:
         """Recharge et affiche la liste des sessions du jour."""
-        # Vider le contenu précédent
         for widget in self._sessions_scroll.winfo_children():
             widget.destroy()
 
@@ -320,8 +294,7 @@ class App(ctk.CTk):
             ).pack(side="right", padx=8, pady=4)
 
         # Total du jour
-        sep = ctk.CTkFrame(self._sessions_scroll, height=1, fg_color=("gray70", "gray40"))
-        sep.pack(fill="x", pady=4)
+        ctk.CTkFrame(self._sessions_scroll, height=1, fg_color=("gray70", "gray40")).pack(fill="x", pady=4)
         total_row = ctk.CTkFrame(self._sessions_scroll, fg_color="transparent")
         total_row.pack(fill="x")
         ctk.CTkLabel(total_row, text="Total", font=ctk.CTkFont(weight="bold"), anchor="w").pack(side="left", padx=8)
@@ -336,36 +309,14 @@ class App(ctk.CTk):
         self.after(0, self._refresh_today_sessions)
 
     # ------------------------------------------------------------------
-    # Paramètres
-    # ------------------------------------------------------------------
-
-    def _load_settings(self) -> None:
-        """Charge les paramètres depuis la base."""
-        self._idle_enabled.set(self._db.get_config("idle_enabled", "1") == "1")
-        self._idle_minutes.set(int(self._db.get_config("idle_minutes", "10")))
-        self._reminder_enabled.set(self._db.get_config("reminder_enabled", "1") == "1")
-        self._reminder_minutes.set(int(self._db.get_config("reminder_minutes", "60")))
-
-    def _save_settings(self) -> None:
-        """Sauvegarde les paramètres en base et les applique immédiatement."""
-        self._db.set_config("idle_enabled", "1" if self._idle_enabled.get() else "0")
-        self._db.set_config("idle_minutes", str(self._idle_minutes.get()))
-        self._db.set_config("reminder_enabled", "1" if self._reminder_enabled.get() else "0")
-        self._db.set_config("reminder_minutes", str(self._reminder_minutes.get()))
-        # Signale à main.py que les paramètres ont changé via un événement virtuel
-        self.event_generate("<<SettingsChanged>>")
-
-    def get_idle_settings(self) -> tuple[bool, int]:
-        """Retourne (activé, seuil_minutes) pour le détecteur d'inactivité."""
-        return self._idle_enabled.get(), self._idle_minutes.get()
-
-    def get_reminder_settings(self) -> tuple[bool, int]:
-        """Retourne (activé, intervalle_minutes) pour le rappel de durée."""
-        return self._reminder_enabled.get(), self._reminder_minutes.get()
-
-    # ------------------------------------------------------------------
     # Thème
     # ------------------------------------------------------------------
+
+    def _apply_theme(self) -> None:
+        """Applique le thème sauvegardé en base."""
+        theme = self._db.get_config("theme", "dark")
+        ctk.set_appearance_mode(theme)
+        self._theme_btn.configure(text="🌙" if theme == "light" else "☀")
 
     def _toggle_theme(self) -> None:
         """Bascule entre thème sombre et thème clair."""
@@ -379,9 +330,18 @@ class App(ctk.CTk):
     # Visibilité / fermeture
     # ------------------------------------------------------------------
 
-    def _hide_to_tray(self) -> None:
-        """Cache la fenêtre dans le tray au lieu de quitter l'application."""
-        self.withdraw()
+    def _on_close(self) -> None:
+        """
+        Réaction à la fermeture de la fenêtre (croix).
+        Selon le paramètre 'close_to_tray' :
+          - 1 (défaut) : masquer dans le tray
+          - 0 : quitter l'application
+        """
+        if self._db.get_config("close_to_tray", "1") == "1":
+            self.withdraw()
+        else:
+            if self._on_quit_requested:
+                self._on_quit_requested()
 
     def show(self) -> None:
         """Affiche et met au premier plan la fenêtre principale."""

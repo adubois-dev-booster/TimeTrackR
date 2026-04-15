@@ -76,8 +76,9 @@ class TimeTrackRApp:
             timer_engine=self._timer,
             database=self._db,
             on_new_task_requested=self._show_window,
+            on_quit_requested=self._quit,
         )
-        # Écoute les changements de paramètres
+        # Écoute les changements de paramètres (émis par SettingsWindow après sauvegarde)
         self._app.bind("<<SettingsChanged>>", self._on_settings_changed)
 
         # --- Reprise de session ---
@@ -122,6 +123,7 @@ class TimeTrackRApp:
         """Construit et retourne l'icône tray avec son menu contextuel."""
         menu = pystray.Menu(
             pystray.MenuItem("Ouvrir TimeTrackR", self._show_window, default=True),
+            pystray.MenuItem("Paramètres", self._show_settings),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Pause / Reprendre", self._tray_toggle_pause),
             pystray.MenuItem("Arrêter la tâche", self._tray_stop),
@@ -153,6 +155,10 @@ class TimeTrackRApp:
     def _show_window(self, icon=None, item=None) -> None:
         """Affiche la fenêtre principale (depuis n'importe quel thread)."""
         self._app.after(0, self._app.show)
+
+    def _show_settings(self, icon=None, item=None) -> None:
+        """Ouvre la fenêtre des paramètres depuis le tray."""
+        self._app.after(0, self._app.open_settings)
 
     def _tray_toggle_pause(self, icon=None, item=None) -> None:
         """Bascule pause/reprise depuis le menu tray."""
@@ -226,9 +232,15 @@ class TimeTrackRApp:
     # ------------------------------------------------------------------
 
     def _on_settings_changed(self, event=None) -> None:
-        """Synchronise les modules périphériques avec les nouveaux paramètres."""
-        idle_enabled, idle_minutes = self._app.get_idle_settings()
-        reminder_enabled, reminder_minutes = self._app.get_reminder_settings()
+        """
+        Synchronise les modules périphériques avec les nouveaux paramètres.
+        SettingsWindow a déjà sauvegardé en base avant d'émettre cet événement,
+        donc on lit directement depuis la DB.
+        """
+        idle_enabled = self._db.get_config("idle_enabled", "1") == "1"
+        idle_minutes = int(self._db.get_config("idle_minutes", "10"))
+        reminder_enabled = self._db.get_config("reminder_enabled", "1") == "1"
+        reminder_minutes = int(self._db.get_config("reminder_minutes", "60"))
 
         self._idle_detector.set_threshold(idle_minutes)
         if idle_enabled:
