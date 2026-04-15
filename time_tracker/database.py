@@ -36,7 +36,7 @@ class Database:
         return conn
 
     def _init_tables(self) -> None:
-        """Crée les tables si elles n'existent pas encore."""
+        """Crée les tables si elles n'existent pas encore, puis migre le schéma."""
         with self._connect() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS tasks (
@@ -60,6 +60,18 @@ class Database:
                     value TEXT NOT NULL
                 );
             """)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Applique les migrations de schéma incrémentales."""
+        with self._connect() as conn:
+            # v2 : colonne note sur les sessions
+            try:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN note TEXT NOT NULL DEFAULT ''"
+                )
+            except sqlite3.OperationalError:
+                pass  # Colonne déjà présente
 
     # ------------------------------------------------------------------
     # Tâches
@@ -143,14 +155,14 @@ class Database:
                 )
 
     def get_today_sessions(self) -> list[dict]:
-        """Retourne toutes les sessions du jour avec le nom et projet de la tâche."""
+        """Retourne toutes les sessions du jour avec le nom, projet et note de la tâche."""
         today = datetime.now().date().isoformat()
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT s.id, t.name, t.project,
                        s.started_at, s.ended_at,
-                       s.duration_seconds, s.is_active
+                       s.duration_seconds, s.is_active, s.note
                 FROM sessions s
                 JOIN tasks t ON t.id = s.task_id
                 WHERE DATE(s.started_at) = ?
@@ -159,6 +171,21 @@ class Database:
                 (today,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def get_session_note(self, session_id: int) -> str:
+        """Retourne la note associée à une session."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT note FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+            return row["note"] if row else ""
+
+    def set_session_note(self, session_id: int, note: str) -> None:
+        """Enregistre ou met à jour la note d'une session."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE sessions SET note = ? WHERE id = ?", (note, session_id)
+            )
 
     def get_last_active_session(self) -> dict | None:
         """

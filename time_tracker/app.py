@@ -321,15 +321,27 @@ class App(ctk.CTk):
             proj = f"  [{s['project']}]" if s["project"] else ""
             duree = TimerEngine.format_elapsed(s["duration_seconds"])
             statut = " ●" if s["is_active"] else ""
+            note = s.get("note", "")
+            pad_b = (4, 0) if note else (4, 4)
 
+            header_row = ctk.CTkFrame(row, fg_color="transparent")
+            header_row.pack(fill="x")
             ctk.CTkLabel(
-                row, text=f"{nom}{proj}{statut}",
+                header_row, text=f"{nom}{proj}{statut}",
                 anchor="w", font=ctk.CTkFont(size=12),
-            ).pack(side="left", padx=8, pady=4)
+            ).pack(side="left", padx=8, pady=pad_b)
             ctk.CTkLabel(
-                row, text=duree,
+                header_row, text=duree,
                 anchor="e", font=ctk.CTkFont(size=12),
-            ).pack(side="right", padx=8, pady=4)
+            ).pack(side="right", padx=8, pady=pad_b)
+
+            if note:
+                note_short = note if len(note) <= 80 else note[:77] + "…"
+                ctk.CTkLabel(
+                    row, text=f"📝  {note_short}",
+                    anchor="w", font=ctk.CTkFont(size=11),
+                    text_color=("gray50", "gray60"),
+                ).pack(fill="x", padx=12, pady=(0, 4))
 
         ctk.CTkFrame(self._sessions_scroll, height=1, fg_color=("gray70", "gray40")).pack(fill="x", pady=4)
         total_row = ctk.CTkFrame(self._sessions_scroll, fg_color="transparent")

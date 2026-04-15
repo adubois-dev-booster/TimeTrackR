@@ -2,15 +2,16 @@
 Fenêtre overlay compacte.
 Toujours au-dessus des autres fenêtres, sans barre de titre, absente de la barre des tâches.
 Permet de voir la tâche en cours et de changer de tâche rapidement.
-Draggable via l'icône chronomètre, redimensionnable en largeur via la poignée droite.
 
-Palette sombre fixe (indépendante du thème global de l'application).
-Utilise tk.Toplevel pour overrideredirect fiable, et after(10) pour deiconify
-après le démarrage du mainloop (sans ça les widgets sont créés mais pas peints).
+Palette sombre fixe (indépendante du thème global).
+Coins arrondis via wm_attributes("-transparentcolor") : la couleur _TRANSPARENT est rendue
+invisible par Windows, et les coins du CTkFrame (outside rounded rect) l'utilisent comme
+fond de canvas → effet de fenêtre aux bords arrondis sans clip Win32.
+Utilise tk.Toplevel + after(10, deiconify) pour un rendu fiable des widgets.
 """
 
 import tkinter as tk
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import customtkinter as ctk
 
@@ -18,6 +19,9 @@ from .database import Database
 from .icon import get_ctk_image
 from .task_manager import TaskManager
 from .timer_engine import TimerEngine
+
+if TYPE_CHECKING:
+    from .note_window import NoteWindow
 
 
 # Hauteur fixe de l'overlay en pixels
@@ -27,14 +31,14 @@ _HEIGHT = 46
 _NEW_TASK_LABEL = "＋  Nouvelle tâche"
 
 # ── Palette sombre fixe ───────────────────────────────────────────────
-_BG          = "#1c1c1c"   # fond de la fenêtre
+_TRANSPARENT = "#010101"   # couleur clé → transparente (coins arrondis)
 _FRAME_BG    = "#262626"   # fond CTkFrame principal
-_ITEM_BG     = "#333333"   # fond OptionMenu / Entry
-_ACCENT      = "#3b82f6"   # bleu accent (bordure entry, hover dropdown)
-_HANDLE_BG   = "#3f3f3f"   # poignée de redimensionnement
-_BTN_BG      = "#404040"   # bouton flèche du menu
-_BTN_HOVER   = "#555555"   # hover bouton flèche
-_DD_BG       = "#1e1e1e"   # fond liste déroulante
+_ITEM_BG     = "#2e2e2e"   # fond OptionMenu / Entry
+_ACCENT      = "#3b82f6"   # bleu accent (bordure entry)
+_HANDLE_BG   = "#3a3a3a"   # poignée de redimensionnement
+_BTN_BG      = "#383838"   # bouton flèche du menu
+_BTN_HOVER   = "#484848"   # hover bouton flèche
+_DD_HOVER    = "#484848"   # hover items liste déroulante (gris, pas bleu)
 _TEXT        = "#e2e8f0"   # texte principal
 _TEXT_DIM    = "#94a3b8"   # placeholder
 
@@ -66,12 +70,15 @@ class Overlay(tk.Toplevel):
         self._resize_x = 0
         self._resize_w = int(self._db.get_config("overlay_width", "340"))
         self._ignore_option = False
+        self._note_win: "NoteWindow | None" = None
 
         # --- Configuration fenêtre ---
         self.withdraw()
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-        self.configure(bg=_BG)
+        # _TRANSPARENT rendue invisible → seul le CTkFrame (arrondi) est visible
+        self.configure(bg=_TRANSPARENT)
+        self.wm_attributes("-transparentcolor", _TRANSPARENT)
 
         ox = int(self._db.get_config("overlay_x", "100"))
         oy = int(self._db.get_config("overlay_y", "100"))
@@ -91,16 +98,17 @@ class Overlay(tk.Toplevel):
     def _build_ui(self) -> None:
         """Construit l'interface complète de l'overlay."""
 
-        # Cadre principal
-        self._bg = ctk.CTkFrame(self, corner_radius=8, fg_color=_FRAME_BG)
-        self._bg.pack(fill="both", expand=True, padx=1, pady=1)
+        # Cadre principal — corner_radius crée les coins arrondis visibles
+        # Les coins du canvas (extérieur du rect arrondi) utilisent bg=_TRANSPARENT → invisibles
+        self._bg = ctk.CTkFrame(self, corner_radius=10, fg_color=_FRAME_BG)
+        self._bg.pack(fill="both", expand=True)
 
         # -- Icône chronomètre : zone de drag (curseur main) --
         icon_img = get_ctk_image(size=20)
         icon_lbl = ctk.CTkLabel(
             self._bg, image=icon_img, text="", width=28, cursor="hand2",
         )
-        icon_lbl.pack(side="left", padx=(6, 2))
+        icon_lbl.pack(side="left", padx=(8, 2))
         icon_lbl.bind("<ButtonPress-1>", self._drag_start)
         icon_lbl.bind("<B1-Motion>", self._drag_motion)
         icon_lbl.bind("<ButtonRelease-1>", self._drag_end)
@@ -113,6 +121,20 @@ class Overlay(tk.Toplevel):
         handle.bind("<ButtonPress-1>", self._resize_start)
         handle.bind("<B1-Motion>", self._resize_motion)
         handle.bind("<ButtonRelease-1>", self._resize_end)
+
+        # -- Bouton note 📝 (à gauche de la poignée) --
+        self._note_btn = ctk.CTkButton(
+            self._bg,
+            text="📝",
+            width=28,
+            height=30,
+            fg_color=_BTN_BG,
+            hover_color=_BTN_HOVER,
+            text_color=_TEXT,
+            corner_radius=6,
+            command=self._open_note,
+        )
+        self._note_btn.pack(side="right", padx=(0, 4))
 
         # -- Label timer (à gauche de la zone centrale) --
         self._timer_lbl = ctk.CTkLabel(
@@ -129,7 +151,7 @@ class Overlay(tk.Toplevel):
         self._center = ctk.CTkFrame(self._bg, fg_color="transparent")
         self._center.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
-        # Menu déroulant (lecture seule, pas de saisie clavier)
+        # Menu déroulant (lecture seule — CTkOptionMenu n'autorise pas la saisie)
         self._task_var = tk.StringVar(value=_NEW_TASK_LABEL)
         self._option_menu = ctk.CTkOptionMenu(
             self._center,
@@ -141,9 +163,9 @@ class Overlay(tk.Toplevel):
             button_color=_BTN_BG,
             button_hover_color=_BTN_HOVER,
             text_color=_TEXT,
-            dropdown_fg_color=_DD_BG,
+            dropdown_fg_color=_ITEM_BG,
             dropdown_text_color=_TEXT,
-            dropdown_hover_color=_ACCENT,
+            dropdown_hover_color=_DD_HOVER,
             dynamic_resizing=False,
         )
         self._option_menu.pack(fill="x", expand=True)
@@ -191,8 +213,21 @@ class Overlay(tk.Toplevel):
         self._refresh_task_list()
 
     def _on_new_task_cancel(self, event=None) -> None:
-        """Annule la saisie (touche Echap)."""
+        """Annule la saisie (touche Échap)."""
         self._show_option_mode()
+
+    # ------------------------------------------------------------------
+    # Fenêtre de note (singleton)
+    # ------------------------------------------------------------------
+
+    def _open_note(self) -> None:
+        """Ouvre (ou ramène au premier plan) la fenêtre de note."""
+        if self._note_win is not None and self._note_win.winfo_exists():
+            self._note_win.lift()
+            self._note_win.focus_force()
+            return
+        from .note_window import NoteWindow
+        self._note_win = NoteWindow(self, self._task_manager)
 
     # ------------------------------------------------------------------
     # Gestion du menu déroulant
@@ -221,7 +256,6 @@ class Overlay(tk.Toplevel):
         if self._ignore_option:
             return
         if value == _NEW_TASK_LABEL:
-            # Passer en mode saisie inline au lieu d'ouvrir la fenêtre principale
             self._show_entry_mode()
             return
         tasks = self._task_manager.get_recent_tasks()

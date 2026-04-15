@@ -109,3 +109,21 @@ class TaskManager:
     def get_recent_tasks(self, limit: int = 10) -> list[dict]:
         """Retourne les tâches récentes complètes (nom + projet)."""
         return self._db.get_recent_tasks(limit)
+
+    # ------------------------------------------------------------------
+    # Notes de session
+    # ------------------------------------------------------------------
+
+    def get_current_note(self) -> str:
+        """Retourne la note de la session en cours (vide si aucune session active)."""
+        sid = self._timer.session_id
+        if sid is None:
+            return ""
+        return self._db.get_session_note(sid)
+
+    def set_current_note(self, note: str) -> None:
+        """Enregistre la note pour la session en cours (no-op si aucune session active)."""
+        sid = self._timer.session_id
+        if sid is None:
+            return
+        self._db.set_session_note(sid, note)
