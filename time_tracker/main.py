@@ -4,10 +4,7 @@ Initialise tous les composants, gère la reprise de session au démarrage
 et fait tourner l'icône tray en arrière-plan.
 """
 
-import sys
-import threading
 import tkinter as tk
-from io import BytesIO
 
 import pystray
 from PIL import Image, ImageDraw
@@ -81,10 +78,7 @@ class TimeTrackRApp:
         # Écoute les changements de paramètres (émis par SettingsWindow après sauvegarde)
         self._app.bind("<<SettingsChanged>>", self._on_settings_changed)
 
-        # --- Reprise de session ---
-        self._check_resumable_session()
-
-        # --- Icône tray ---
+        # --- Icône tray (construite ici, démarrée dans run()) ---
         self._tray_icon = self._build_tray()
 
     # ------------------------------------------------------------------
@@ -170,10 +164,11 @@ class TimeTrackRApp:
         self._app.after(0, self._app._on_stop)
 
     def _quit(self, icon=None, item=None) -> None:
-        """Fermeture propre : sauvegarde, arrêt du timer, fin du tray et de Tkinter."""
+        """Fermeture propre : sauvegarde finale, arrêt du timer, fin de Tkinter."""
         if self._timer.is_running:
             self._timer.stop()
-        self._tray_icon.stop()
+        # Détruire la fenêtre Tkinter depuis son thread (via after) pour
+        # que mainloop() se termine proprement, puis pystray est stoppé dans run()
         self._app.after(0, self._app.destroy)
 
     # ------------------------------------------------------------------
@@ -260,17 +255,22 @@ class TimeTrackRApp:
 
     def run(self) -> None:
         """
-        Lance l'icône tray dans un thread séparé et démarre la boucle Tkinter.
-        La boucle Tkinter tourne dans le thread principal (obligatoire sous Windows).
+        Lance l'icône tray via run_detached() (thread interne géré par pystray)
+        puis démarre la boucle Tkinter dans le thread principal.
+        La vérification de session reprend se fait via after() une fois
+        que la boucle est active, pour éviter d'appeler des dialogs avant mainloop.
         """
-        tray_thread = threading.Thread(
-            target=self._tray_icon.run,
-            daemon=True,
-        )
-        tray_thread.start()
-        # La fenêtre principale se cache dans le tray au lieu de se fermer
+        # run_detached() démarre pystray dans son propre thread et rend l'icône
+        # visible via la fonction setup par défaut (visible = True)
+        self._tray_icon.run_detached()
+
+        # Vérification de la session orpheline après que mainloop est démarrée
+        self._app.after(200, self._check_resumable_session)
+
+        # Boucle Tkinter dans le thread principal (obligatoire sous Windows)
         self._app.mainloop()
-        # Quand mainloop() revient (destroy()), on s'assure que le tray est arrêté
+
+        # Nettoyage quand mainloop() se termine (suite à app.destroy())
         try:
             self._tray_icon.stop()
         except Exception:

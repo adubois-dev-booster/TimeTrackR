@@ -48,6 +48,9 @@ class App(ctk.CTk):
         self._refresh_today_sessions()
         self._apply_theme()
 
+        # Fenêtre cachée au démarrage — l'utilisateur l'ouvre via le tray
+        self.withdraw()
+
     # ------------------------------------------------------------------
     # Construction de l'interface
     # ------------------------------------------------------------------
