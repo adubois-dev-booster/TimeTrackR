@@ -29,7 +29,8 @@ Tous les fichiers sont dans `time_tracker/` :
 | Fichier | Rôle |
 |---|---|
 | `main.py` | Point d'entrée. Classe `TimeTrackRApp` orchestre tous les composants, gère le tray pystray (thread séparé) et la boucle Tkinter (thread principal). |
-| `app.py` | Fenêtre CustomTkinter. Se cache dans le tray (`withdraw`) au lieu de se fermer. Les mises à jour depuis d'autres threads passent obligatoirement par `after()`. |
+| `app.py` | Fenêtre CustomTkinter. Se cache dans le tray ou quitte selon `close_to_tray` (config DB). Mises à jour depuis d'autres threads via `after()`. |
+| `settings_window.py` | `CTkToplevel` modale, singleton. Sections **Application** (démarrage Windows via `winreg` + fermeture tray) et **Rappels** (idle + durée tâche). Sauvegarde en base puis émet `<<SettingsChanged>>` sur la fenêtre parente. |
 | `timer_engine.py` | Thread daemon qui incrémente `_elapsed_seconds` toutes les secondes, appelle `tick_callback`, et sauvegarde en base toutes les 30 s (`AUTOSAVE_INTERVAL`). Toutes les mutations d'état passent par `self._lock`. |
 | `task_manager.py` | Façade entre `Database`, `TimerEngine` et l'UI. Gère le démarrage/arrêt de tâches et la reprise de session au démarrage. |
 | `database.py` | SQLite dans `%APPDATA%/TimeTracker/timetracker.db`. Tables : `tasks`, `sessions` (avec `is_active` pour détecter les sessions orphelines), `config`. |
