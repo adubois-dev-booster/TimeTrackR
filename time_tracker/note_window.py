@@ -81,24 +81,9 @@ class NoteWindow(tk.Toplevel):
             text_color=_TEXT,
         ).pack(side="left")
 
-        # Zone de texte
-        self._text = ctk.CTkTextbox(
-            self._frame,
-            fg_color=_ITEM_BG,
-            text_color=_TEXT,
-            border_color="#3a3a3a",
-            border_width=1,
-            corner_radius=6,
-            wrap="word",
-            font=ctk.CTkFont(size=12),
-            scrollbar_button_color="#404040",
-            scrollbar_button_hover_color="#505050",
-        )
-        self._text.pack(fill="both", expand=True, padx=10, pady=(0, 8))
-
-        # Boutons Annuler / Enregistrer
+        # Boutons Annuler / Enregistrer (packés AVANT la textbox pour réserver leur place)
         btn_row = ctk.CTkFrame(self._frame, fg_color="transparent")
-        btn_row.pack(fill="x", padx=10, pady=(0, 10))
+        btn_row.pack(side="bottom", fill="x", padx=10, pady=(4, 10))
 
         ctk.CTkButton(
             btn_row,
@@ -121,6 +106,21 @@ class NoteWindow(tk.Toplevel):
             text_color="white",
             command=self._save,
         ).pack(side="right")
+
+        # Zone de texte (packée en dernier pour remplir l'espace restant)
+        self._text = ctk.CTkTextbox(
+            self._frame,
+            fg_color=_ITEM_BG,
+            text_color=_TEXT,
+            border_color="#3a3a3a",
+            border_width=1,
+            corner_radius=6,
+            wrap="word",
+            font=ctk.CTkFont(size=12),
+            scrollbar_button_color="#404040",
+            scrollbar_button_hover_color="#505050",
+        )
+        self._text.pack(fill="both", expand=True, padx=10, pady=(0, 4))
 
     # ------------------------------------------------------------------
     # Sauvegarde
