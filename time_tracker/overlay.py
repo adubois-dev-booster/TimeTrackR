@@ -26,8 +26,9 @@ if TYPE_CHECKING:
 # Hauteur fixe de l'overlay en pixels
 _HEIGHT = 46
 
-# Option spéciale dans le menu déroulant
+# Labels spéciaux dans le menu déroulant
 _NEW_TASK_LABEL = "＋  Nouvelle tâche"
+_IDLE_LABEL     = "aucune tâche"       # affiché quand aucun timer n'est actif
 
 # ── Palette sombre fixe ───────────────────────────────────────────────
 _TRANSPARENT = "#010101"   # couleur clé → transparente (coins arrondis)
@@ -124,11 +125,12 @@ class Overlay(tk.Toplevel):
         handle.bind("<B1-Motion>", self._resize_motion)
         handle.bind("<ButtonRelease-1>", self._resize_end)
 
-        # Bouton note 📝
+        # Bouton note 📝 (désactivé tant qu'aucune tâche n'est en cours)
         self._note_btn = ctk.CTkButton(
             self._bg, text="📝", width=28, height=30,
             fg_color=_BTN_BG, hover_color=_BTN_HOVER,
             text_color=_TEXT, corner_radius=6,
+            state="disabled",
             command=self._toggle_note,
         )
         self._note_btn.pack(side="right", padx=(0, 4))
@@ -224,16 +226,17 @@ class Overlay(tk.Toplevel):
         self._on_stopped()
 
     def _update_control_buttons(self, running: bool, paused: bool) -> None:
-        """Met à jour l'état et l'icône des boutons play/pause et stop."""
+        """Met à jour l'état de tous les boutons de contrôle et la couleur du menu."""
         if running:
-            self._play_btn.configure(
-                text="▶" if paused else "⏸",
-                state="normal",
-            )
+            self._option_menu.configure(text_color=_TEXT)
+            self._play_btn.configure(text="▶" if paused else "⏸", state="normal")
             self._stop_btn.configure(state="normal")
+            self._note_btn.configure(state="normal")
         else:
+            self._option_menu.configure(text_color=_TEXT_DIM)
             self._play_btn.configure(text="▶", state="disabled")
             self._stop_btn.configure(state="disabled")
+            self._note_btn.configure(state="disabled")
 
     # ------------------------------------------------------------------
     # Fenêtre de note (toggle)
@@ -288,7 +291,8 @@ class Overlay(tk.Toplevel):
             current, _ = self._timer.current_task
             self._set_option_value(current)
         else:
-            self._set_option_value(_NEW_TASK_LABEL)
+            self._set_option_value(_IDLE_LABEL)
+            self._update_control_buttons(running=False, paused=False)
 
     def _set_option_value(self, value: str) -> None:
         self._ignore_option = True
@@ -343,8 +347,8 @@ class Overlay(tk.Toplevel):
         self.after(0, self._on_stopped)
 
     def _on_stopped(self) -> None:
-        self._timer_lbl.configure(text="0h00m00s")
-        self._set_option_value(_NEW_TASK_LABEL)
+        self._timer_lbl.configure(text="")
+        self._set_option_value(_IDLE_LABEL)
         self._update_control_buttons(running=False, paused=False)
 
     def notify_task_list_changed(self) -> None:
