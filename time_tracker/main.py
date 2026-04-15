@@ -89,6 +89,7 @@ class TimeTrackRApp:
             timer_engine=self._timer,
             database=self._db,
             on_open_main=self._show_window,
+            on_stop_requested=self._handle_overlay_stop,
         )
 
         # --- Icône tray ---
@@ -173,6 +174,11 @@ class TimeTrackRApp:
         self._task_manager.stop_task()
         self._app.after(0, self._app._on_stop)
         self._app.after(0, self._overlay.on_task_stopped)
+
+    def _handle_overlay_stop(self) -> None:
+        """Arrêt déclenché depuis le bouton ⏹ de l'overlay : met à jour la fenêtre principale."""
+        # stop_task() est déjà appelé par l'overlay ; on propage juste la mise à jour UI
+        self._app.after(0, self._app._on_stop)
 
     def _quit(self, icon=None, item=None) -> None:
         """Fermeture propre : sauvegarde finale, arrêt du timer, destruction Tkinter."""

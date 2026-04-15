@@ -36,6 +36,11 @@ class NoteWindow(tk.Toplevel):
         super().__init__(parent)
         self._task_manager = task_manager
 
+        # Variables drag et resize
+        self._drag_x = self._drag_y = 0
+        self._resize_x0 = self._resize_y0 = 0
+        self._resize_w0 = self._resize_h0 = 0
+
         self.withdraw()
         self.overrideredirect(True)
         self.attributes("-topmost", True)
@@ -122,6 +127,12 @@ class NoteWindow(tk.Toplevel):
         )
         self._text.pack(fill="both", expand=True, padx=10, pady=(0, 4))
 
+        # Poignée de redimensionnement (coin bas-droite, par-dessus les autres widgets)
+        grip = tk.Frame(self._frame, width=14, height=14, cursor="size_nw_se", bg="#3a3a3a")
+        grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
+        grip.bind("<ButtonPress-1>", self._resize_start)
+        grip.bind("<B1-Motion>", self._resize_motion)
+
     # ------------------------------------------------------------------
     # Sauvegarde
     # ------------------------------------------------------------------
@@ -143,3 +154,18 @@ class NoteWindow(tk.Toplevel):
         x = event.x_root - self._drag_x
         y = event.y_root - self._drag_y
         self.geometry(f"+{x}+{y}")
+
+    # ------------------------------------------------------------------
+    # Resize (coin bas-droite)
+    # ------------------------------------------------------------------
+
+    def _resize_start(self, event: tk.Event) -> None:
+        self._resize_x0 = event.x_root
+        self._resize_y0 = event.y_root
+        self._resize_w0 = self.winfo_width()
+        self._resize_h0 = self.winfo_height()
+
+    def _resize_motion(self, event: tk.Event) -> None:
+        new_w = max(220, self._resize_w0 + event.x_root - self._resize_x0)
+        new_h = max(140, self._resize_h0 + event.y_root - self._resize_y0)
+        self.geometry(f"{new_w}x{new_h}")

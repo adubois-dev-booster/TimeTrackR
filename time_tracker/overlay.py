@@ -1,12 +1,11 @@
 """
 Fenêtre overlay compacte.
 Toujours au-dessus des autres fenêtres, sans barre de titre, absente de la barre des tâches.
-Permet de voir la tâche en cours et de changer de tâche rapidement.
 
 Palette sombre fixe (indépendante du thème global).
-Coins arrondis via wm_attributes("-transparentcolor") : la couleur _TRANSPARENT est rendue
-invisible par Windows, et les coins du CTkFrame (outside rounded rect) l'utilisent comme
-fond de canvas → effet de fenêtre aux bords arrondis sans clip Win32.
+Coins arrondis via wm_attributes("-transparentcolor") : _TRANSPARENT est rendue invisible
+par Windows ; les coins du canvas CTkFrame (outside rounded rect) l'utilisent comme fond
+→ effet de fenêtre aux bords arrondis sans clip Win32.
 Utilise tk.Toplevel + after(10, deiconify) pour un rendu fiable des widgets.
 """
 
@@ -33,12 +32,11 @@ _NEW_TASK_LABEL = "＋  Nouvelle tâche"
 # ── Palette sombre fixe ───────────────────────────────────────────────
 _TRANSPARENT = "#010101"   # couleur clé → transparente (coins arrondis)
 _FRAME_BG    = "#262626"   # fond CTkFrame principal
-_ITEM_BG     = "#2e2e2e"   # fond OptionMenu / Entry
+_ITEM_BG     = "#2e2e2e"   # fond Entry (mode saisie)
 _ACCENT      = "#3b82f6"   # bleu accent (bordure entry)
 _HANDLE_BG   = "#3a3a3a"   # poignée de redimensionnement
-_BTN_BG      = "#383838"   # bouton flèche du menu
-_BTN_HOVER   = "#484848"   # hover bouton flèche
-_DD_HOVER    = "#484848"   # hover items liste déroulante (gris, pas bleu)
+_BTN_BG      = "#343434"   # fond boutons icône
+_BTN_HOVER   = "#484848"   # hover boutons icône
 _TEXT        = "#e2e8f0"   # texte principal
 _TEXT_DIM    = "#94a3b8"   # placeholder
 
@@ -46,8 +44,8 @@ _TEXT_DIM    = "#94a3b8"   # placeholder
 class Overlay(tk.Toplevel):
     """
     Fenêtre flottante compacte affichant la tâche en cours et le timer.
-    Se déplace par drag sur l'icône, se redimensionne en largeur par le bord droit.
-    En mode "nouvelle tâche" : l'OptionMenu est remplacé par une Entry inline.
+    Boutons ▶/⏸ et ⏹ pour contrôler le timer directement depuis l'overlay.
+    Bouton 📝 pour saisir une note sur la session en cours (NoteWindow).
     """
 
     def __init__(
@@ -57,6 +55,7 @@ class Overlay(tk.Toplevel):
         timer_engine: TimerEngine,
         database: Database,
         on_open_main: Callable,
+        on_stop_requested: Callable | None = None,
     ):
         super().__init__(parent)
 
@@ -64,6 +63,7 @@ class Overlay(tk.Toplevel):
         self._timer = timer_engine
         self._db = database
         self._on_open_main = on_open_main
+        self._on_stop_requested = on_stop_requested
 
         # Variables internes
         self._drag_x = self._drag_y = 0
@@ -98,12 +98,12 @@ class Overlay(tk.Toplevel):
     def _build_ui(self) -> None:
         """Construit l'interface complète de l'overlay."""
 
-        # Cadre principal — corner_radius crée les coins arrondis visibles
-        # Les coins du canvas (extérieur du rect arrondi) utilisent bg=_TRANSPARENT → invisibles
+        # Cadre principal — corner_radius crée les coins arrondis visibles.
+        # Les coins du canvas (outside rounded rect) utilisent bg=_TRANSPARENT → invisibles.
         self._bg = ctk.CTkFrame(self, corner_radius=10, fg_color=_FRAME_BG)
         self._bg.pack(fill="both", expand=True)
 
-        # -- Icône chronomètre : zone de drag (curseur main) --
+        # -- Icône chronomètre : zone de drag --
         icon_img = get_ctk_image(size=20)
         icon_lbl = ctk.CTkLabel(
             self._bg, image=icon_img, text="", width=28, cursor="hand2",
@@ -114,7 +114,9 @@ class Overlay(tk.Toplevel):
         icon_lbl.bind("<ButtonRelease-1>", self._drag_end)
         icon_lbl._img = icon_img  # évite le garbage collection
 
-        # -- Poignée de redimensionnement (côté droit, packée en premier) --
+        # ── Éléments côté droit (packés avant le centre pour la priorité) ──
+
+        # Poignée de redimensionnement (tout à droite)
         handle = tk.Frame(self._bg, width=6, cursor="size_we", bg=_HANDLE_BG)
         handle.pack(side="right", fill="y")
         handle.pack_propagate(False)
@@ -122,21 +124,37 @@ class Overlay(tk.Toplevel):
         handle.bind("<B1-Motion>", self._resize_motion)
         handle.bind("<ButtonRelease-1>", self._resize_end)
 
-        # -- Bouton note 📝 (à gauche de la poignée) --
+        # Bouton note 📝
         self._note_btn = ctk.CTkButton(
-            self._bg,
-            text="📝",
-            width=28,
-            height=30,
-            fg_color=_BTN_BG,
-            hover_color=_BTN_HOVER,
-            text_color=_TEXT,
-            corner_radius=6,
-            command=self._open_note,
+            self._bg, text="📝", width=28, height=30,
+            fg_color=_BTN_BG, hover_color=_BTN_HOVER,
+            text_color=_TEXT, corner_radius=6,
+            command=self._toggle_note,
         )
         self._note_btn.pack(side="right", padx=(0, 4))
 
-        # -- Label timer (à gauche de la zone centrale) --
+        # Bouton stop ⏹
+        self._stop_btn = ctk.CTkButton(
+            self._bg, text="⏹", width=28, height=30,
+            fg_color=_BTN_BG, hover_color=_BTN_HOVER,
+            text_color=_TEXT, corner_radius=6,
+            state="disabled",
+            command=self._on_stop_btn,
+        )
+        self._stop_btn.pack(side="right", padx=(0, 2))
+
+        # Bouton play/pause ▶/⏸
+        self._play_btn = ctk.CTkButton(
+            self._bg, text="▶", width=28, height=30,
+            fg_color=_BTN_BG, hover_color=_BTN_HOVER,
+            text_color=_TEXT, corner_radius=6,
+            state="disabled",
+            command=self._on_play_pause,
+        )
+        self._play_btn.pack(side="right", padx=(0, 2))
+
+        # ── Timer ──
+
         self._timer_lbl = ctk.CTkLabel(
             self._bg,
             text="0h00m00s",
@@ -147,11 +165,12 @@ class Overlay(tk.Toplevel):
         )
         self._timer_lbl.pack(side="left", padx=(2, 4))
 
-        # -- Zone centrale : OptionMenu ↔ Entry nouvelle tâche --
+        # ── Zone centrale : OptionMenu ↔ Entry nouvelle tâche ──
+
         self._center = ctk.CTkFrame(self._bg, fg_color="transparent")
         self._center.pack(side="left", fill="x", expand=True, padx=(0, 4))
 
-        # Menu déroulant (lecture seule — CTkOptionMenu n'autorise pas la saisie)
+        # Menu déroulant — fg_color=_FRAME_BG pour fondre dans l'overlay (pas de cadre visible)
         self._task_var = tk.StringVar(value=_NEW_TASK_LABEL)
         self._option_menu = ctk.CTkOptionMenu(
             self._center,
@@ -159,13 +178,13 @@ class Overlay(tk.Toplevel):
             values=[_NEW_TASK_LABEL],
             command=self._on_task_selected,
             height=30,
-            fg_color=_ITEM_BG,
-            button_color=_BTN_BG,
+            fg_color=_FRAME_BG,
+            button_color=_FRAME_BG,
             button_hover_color=_BTN_HOVER,
             text_color=_TEXT,
-            dropdown_fg_color=_ITEM_BG,
+            dropdown_fg_color="#1e1e1e",
             dropdown_text_color=_TEXT,
-            dropdown_hover_color=_DD_HOVER,
+            dropdown_hover_color=_BTN_HOVER,
             dynamic_resizing=False,
         )
         self._option_menu.pack(fill="x", expand=True)
@@ -185,23 +204,65 @@ class Overlay(tk.Toplevel):
         self._new_task_entry.bind("<Escape>", self._on_new_task_cancel)
 
     # ------------------------------------------------------------------
+    # Boutons play/pause et stop
+    # ------------------------------------------------------------------
+
+    def _on_play_pause(self) -> None:
+        """Bascule pause/reprise."""
+        if not self._timer.is_running:
+            return
+        is_paused = self._timer.toggle_pause()
+        self._update_control_buttons(running=True, paused=is_paused)
+
+    def _on_stop_btn(self) -> None:
+        """Arrête la tâche en cours."""
+        # Déléguer l'arrêt (et la mise à jour de la fenêtre principale) au callback
+        if self._on_stop_requested:
+            self._on_stop_requested()
+        else:
+            self._task_manager.stop_task()
+        self._on_stopped()
+
+    def _update_control_buttons(self, running: bool, paused: bool) -> None:
+        """Met à jour l'état et l'icône des boutons play/pause et stop."""
+        if running:
+            self._play_btn.configure(
+                text="▶" if paused else "⏸",
+                state="normal",
+            )
+            self._stop_btn.configure(state="normal")
+        else:
+            self._play_btn.configure(text="▶", state="disabled")
+            self._stop_btn.configure(state="disabled")
+
+    # ------------------------------------------------------------------
+    # Fenêtre de note (toggle)
+    # ------------------------------------------------------------------
+
+    def _toggle_note(self) -> None:
+        """Ouvre ou ferme la fenêtre de note."""
+        if self._note_win is not None and self._note_win.winfo_exists():
+            self._note_win.destroy()
+            self._note_win = None
+            return
+        from .note_window import NoteWindow
+        self._note_win = NoteWindow(self, self._task_manager)
+
+    # ------------------------------------------------------------------
     # Mode saisie nouvelle tâche
     # ------------------------------------------------------------------
 
     def _show_entry_mode(self) -> None:
-        """Passe en mode saisie : masque le menu, affiche l'entry."""
         self._option_menu.pack_forget()
         self._new_task_entry.pack(fill="x", expand=True)
         self._new_task_entry.delete(0, "end")
         self._new_task_entry.focus_set()
 
     def _show_option_mode(self) -> None:
-        """Repasse en mode sélection : masque l'entry, affiche le menu."""
         self._new_task_entry.pack_forget()
         self._option_menu.pack(fill="x", expand=True)
 
     def _on_new_task_confirm(self, event=None) -> None:
-        """Valide la saisie d'une nouvelle tâche (touche Entrée)."""
         name = self._new_task_entry.get().strip()
         self._show_option_mode()
         if not name:
@@ -213,31 +274,15 @@ class Overlay(tk.Toplevel):
         self._refresh_task_list()
 
     def _on_new_task_cancel(self, event=None) -> None:
-        """Annule la saisie (touche Échap)."""
         self._show_option_mode()
-
-    # ------------------------------------------------------------------
-    # Fenêtre de note (singleton)
-    # ------------------------------------------------------------------
-
-    def _open_note(self) -> None:
-        """Ouvre (ou ramène au premier plan) la fenêtre de note."""
-        if self._note_win is not None and self._note_win.winfo_exists():
-            self._note_win.lift()
-            self._note_win.focus_force()
-            return
-        from .note_window import NoteWindow
-        self._note_win = NoteWindow(self, self._task_manager)
 
     # ------------------------------------------------------------------
     # Gestion du menu déroulant
     # ------------------------------------------------------------------
 
     def _refresh_task_list(self) -> None:
-        """Recharge la liste des tâches récentes dans le menu."""
         names = self._task_manager.get_recent_task_names()
-        values = [_NEW_TASK_LABEL] + names
-        self._option_menu.configure(values=values)
+        self._option_menu.configure(values=[_NEW_TASK_LABEL] + names)
 
         if self._timer.is_running:
             current, _ = self._timer.current_task
@@ -246,18 +291,21 @@ class Overlay(tk.Toplevel):
             self._set_option_value(_NEW_TASK_LABEL)
 
     def _set_option_value(self, value: str) -> None:
-        """Met à jour le menu sans déclencher le callback."""
         self._ignore_option = True
         self._task_var.set(value)
         self._ignore_option = False
 
     def _on_task_selected(self, value: str) -> None:
-        """Appelé par CTkOptionMenu quand l'utilisateur sélectionne une option."""
         if self._ignore_option:
             return
         if value == _NEW_TASK_LABEL:
             self._show_entry_mode()
             return
+        # Ne rien faire si la tâche est déjà en cours
+        if self._timer.is_running:
+            current, _ = self._timer.current_task
+            if current == value:
+                return
         tasks = self._task_manager.get_recent_tasks()
         match = next((t for t in tasks if t["name"] == value), None)
         project = match["project"] if match else ""
@@ -272,7 +320,6 @@ class Overlay(tk.Toplevel):
 
     @staticmethod
     def _format_timer(elapsed: int) -> str:
-        """Retourne le temps au format XhMMmSSs (ex : 1h23m45s)."""
         h = elapsed // 3600
         m = (elapsed % 3600) // 60
         s = elapsed % 60
@@ -283,29 +330,28 @@ class Overlay(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def on_timer_tick(self, elapsed: int, task_name: str, project: str) -> None:
-        """Reçoit le tick du timer (autre thread) — délègue via after()."""
         self.after(0, self._update_display, elapsed, task_name)
 
     def _update_display(self, elapsed: int, task_name: str) -> None:
-        """Met à jour le label timer et synchronise la sélection du menu."""
         self._timer_lbl.configure(text=self._format_timer(elapsed))
         if self._task_var.get() != task_name:
             self._set_option_value(task_name)
+        # Timer ticking → forcément running et non pausé
+        self._update_control_buttons(running=True, paused=False)
 
     def on_task_stopped(self) -> None:
-        """Appelé depuis le thread principal quand le timer s'arrête."""
         self.after(0, self._on_stopped)
 
     def _on_stopped(self) -> None:
         self._timer_lbl.configure(text="0h00m00s")
         self._set_option_value(_NEW_TASK_LABEL)
+        self._update_control_buttons(running=False, paused=False)
 
     def notify_task_list_changed(self) -> None:
-        """Appelé quand la liste des tâches doit être rechargée."""
         self.after(0, self._refresh_task_list)
 
     # ------------------------------------------------------------------
-    # Drag (déplacement de la fenêtre)
+    # Drag
     # ------------------------------------------------------------------
 
     def _drag_start(self, event: tk.Event) -> None:
@@ -330,8 +376,7 @@ class Overlay(tk.Toplevel):
         self._resize_w = self.winfo_width()
 
     def _resize_motion(self, event: tk.Event) -> None:
-        delta = event.x_root - self._resize_x
-        new_w = max(200, self._resize_w + delta)
+        new_w = max(200, self._resize_w + event.x_root - self._resize_x)
         self.geometry(f"{new_w}x{_HEIGHT}")
 
     def _resize_end(self, event: tk.Event) -> None:
