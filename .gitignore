@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Environnements virtuels
+venv/
+.venv/
+env/
+.env
+
+# Base de données
+*.db
+*.sqlite
+*.sqlite3
+
+# Fichiers de config locaux
+config.local.*
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Logs
+*.log
+
+# Windows
+Thumbs.db
+desktop.ini
