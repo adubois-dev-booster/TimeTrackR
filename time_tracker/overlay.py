@@ -44,28 +44,37 @@ class Overlay(ctk.CTkToplevel):
         self._db = database
         self._on_open_main = on_open_main
 
-        # -- Comportement fenêtre --
-        # overrideredirect supprime la barre de titre et enlève la fenêtre
-        # de la barre des tâches Windows
-        self.overrideredirect(True)
-        self.attributes("-topmost", True)
-
-        # -- Géométrie restaurée depuis la config --
-        ox = int(self._db.get_config("overlay_x", "100"))
-        oy = int(self._db.get_config("overlay_y", "100"))
-        ow = int(self._db.get_config("overlay_width", "340"))
-        self.geometry(f"{ow}x{_HEIGHT}+{ox}+{oy}")
-        self.resizable(True, False)
-        self.minsize(200, _HEIGHT)
-
         # Variables internes
         self._drag_x = self._drag_y = 0
         self._resize_x = 0
-        self._resize_w = ow
-        self._ignore_combo = False  # évite les boucles lors des mises à jour programmatiques
+        self._resize_w = int(self._db.get_config("overlay_width", "340"))
+        self._ignore_combo = False
 
+        # Cacher immédiatement : CTkToplevel fait un setup différé via after().
+        # On attend ce cycle avant d'appeler overrideredirect pour éviter que
+        # le rendu des widgets soit bloqué (fenêtre vide sur Windows).
+        self.withdraw()
         self._build_ui()
         self._refresh_task_list()
+
+        # Activer overrideredirect après que CTkToplevel a terminé son init
+        self.after(50, self._apply_overlay_style)
+
+    def _apply_overlay_style(self) -> None:
+        """
+        Applique overrideredirect et repositionne la fenêtre.
+        Appelé via after(50) pour laisser CTkToplevel terminer son propre setup.
+        """
+        ox = int(self._db.get_config("overlay_x", "100"))
+        oy = int(self._db.get_config("overlay_y", "100"))
+        ow = int(self._db.get_config("overlay_width", "340"))
+
+        self.overrideredirect(True)
+        self.attributes("-topmost", True)
+        self.geometry(f"{ow}x{_HEIGHT}+{ox}+{oy}")
+        self.resizable(True, False)
+        self.minsize(200, _HEIGHT)
+        self.deiconify()
 
     # ------------------------------------------------------------------
     # Construction de l'interface
