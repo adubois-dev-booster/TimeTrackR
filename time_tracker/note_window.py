@@ -1,7 +1,11 @@
 """
 Fenêtre flottante de saisie de note pour la session en cours.
 Même palette sombre que l'overlay, coins arrondis via transparentcolor.
-S'ouvre depuis le bouton 📝 de l'overlay.
+
+Auto-sauvegarde à la fermeture :
+  - perte du focus (clic hors fenêtre)
+  - touche Échap
+Pas de boutons : ouvrir, taper, repartir.
 """
 
 import tkinter as tk
@@ -11,32 +15,32 @@ import customtkinter as ctk
 from .task_manager import TaskManager
 
 
-# Couleur clé rendue transparente par Windows → permet les coins arrondis
+# Couleur clé rendue transparente par Windows → coins arrondis
 _TRANSPARENT = "#010101"
 
 # Palette sombre (identique à overlay.py)
-_FRAME_BG  = "#262626"
-_ITEM_BG   = "#2e2e2e"
-_ACCENT    = "#3b82f6"
-_TEXT      = "#e2e8f0"
-_TEXT_DIM  = "#94a3b8"
+_FRAME_BG = "#262626"
+_ITEM_BG  = "#2e2e2e"
+_ACCENT   = "#3b82f6"
+_HANDLE   = "#3a3a3a"
+_TEXT     = "#e2e8f0"
+_TEXT_DIM = "#64748b"
 
 _WIDTH  = 300
-_HEIGHT = 190
+_HEIGHT = 150
 
 
 class NoteWindow(tk.Toplevel):
     """
     Petite fenêtre borderless pour saisir une note liée à la session en cours.
-    Pré-remplie si une note existe déjà.
-    Entrée/Échap comme raccourcis clavier (Ctrl+Entrée pour valider).
+    Pré-remplie si une note existe déjà. Sauvegarde automatiquement à la fermeture.
+    Redimensionnable via la poignée bas-droite.
     """
 
     def __init__(self, parent: tk.Toplevel, task_manager: TaskManager):
         super().__init__(parent)
         self._task_manager = task_manager
 
-        # Variables drag et resize
         self._drag_x = self._drag_y = 0
         self._resize_x0 = self._resize_y0 = 0
         self._resize_w0 = self._resize_h0 = 0
@@ -60,7 +64,9 @@ class NoteWindow(tk.Toplevel):
         if note:
             self._text.insert("1.0", note)
 
-        self.bind("<Escape>", lambda e: self.destroy())
+        # Auto-sauvegarde : perte du focus ou Échap
+        self._text.bind("<FocusOut>", lambda e: self.after(80, self._maybe_close))
+        self.bind("<Escape>", lambda e: self._save_and_close())
 
         self.after(10, self.deiconify)
         self.after(20, self._text.focus_set)
@@ -73,9 +79,9 @@ class NoteWindow(tk.Toplevel):
         self._frame = ctk.CTkFrame(self, corner_radius=10, fg_color=_FRAME_BG)
         self._frame.pack(fill="both", expand=True)
 
-        # En-tête avec titre et drag
+        # En-tête draggable (titre + indication auto-save)
         header = ctk.CTkFrame(self._frame, fg_color="transparent", cursor="hand2")
-        header.pack(fill="x", padx=10, pady=(10, 6))
+        header.pack(fill="x", padx=10, pady=(10, 4))
         header.bind("<ButtonPress-1>", self._drag_start)
         header.bind("<B1-Motion>", self._drag_motion)
 
@@ -86,38 +92,19 @@ class NoteWindow(tk.Toplevel):
             text_color=_TEXT,
         ).pack(side="left")
 
-        # Boutons Annuler / Enregistrer (packés AVANT la textbox pour réserver leur place)
-        btn_row = ctk.CTkFrame(self._frame, fg_color="transparent")
-        btn_row.pack(side="bottom", fill="x", padx=10, pady=(4, 10))
-
-        ctk.CTkButton(
-            btn_row,
-            text="✕  Annuler",
-            width=110,
-            height=28,
-            fg_color="#3a3a3a",
-            hover_color="#4a4a4a",
-            text_color=_TEXT,
-            command=self.destroy,
-        ).pack(side="right", padx=(6, 0))
-
-        ctk.CTkButton(
-            btn_row,
-            text="✓  Enregistrer",
-            width=130,
-            height=28,
-            fg_color="#16a34a",
-            hover_color="#15803d",
-            text_color="white",
-            command=self._save,
+        ctk.CTkLabel(
+            header,
+            text="auto-sauvegardée",
+            font=ctk.CTkFont(size=10),
+            text_color=_TEXT_DIM,
         ).pack(side="right")
 
-        # Zone de texte (packée en dernier pour remplir l'espace restant)
+        # Zone de texte (remplit tout l'espace disponible)
         self._text = ctk.CTkTextbox(
             self._frame,
             fg_color=_ITEM_BG,
             text_color=_TEXT,
-            border_color="#3a3a3a",
+            border_color=_ACCENT,
             border_width=1,
             corner_radius=6,
             wrap="word",
@@ -125,25 +112,51 @@ class NoteWindow(tk.Toplevel):
             scrollbar_button_color="#404040",
             scrollbar_button_hover_color="#505050",
         )
-        self._text.pack(fill="both", expand=True, padx=10, pady=(0, 4))
+        self._text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
-        # Poignée de redimensionnement (coin bas-droite, par-dessus les autres widgets)
-        grip = tk.Frame(self._frame, width=14, height=14, cursor="size_nw_se", bg="#3a3a3a")
+        # Poignée de redimensionnement (coin bas-droite)
+        grip = tk.Frame(self._frame, width=14, height=14, cursor="size_nw_se", bg=_HANDLE)
         grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
         grip.bind("<ButtonPress-1>", self._resize_start)
         grip.bind("<B1-Motion>", self._resize_motion)
 
     # ------------------------------------------------------------------
-    # Sauvegarde
+    # Auto-sauvegarde
     # ------------------------------------------------------------------
 
-    def _save(self) -> None:
-        note = self._text.get("1.0", "end-1c").strip()
-        self._task_manager.set_current_note(note)
-        self.destroy()
+    def _maybe_close(self) -> None:
+        """
+        Appelée 80 ms après un FocusOut sur la textbox.
+        Ferme et sauvegarde seulement si le focus est vraiment sorti de cette fenêtre.
+        """
+        try:
+            focused = self.focus_get()
+        except tk.TclError:
+            self._save_and_close()
+            return
+
+        if focused is not None:
+            try:
+                if focused.winfo_toplevel() is self:
+                    return  # Focus resté dans la fenêtre (ex : grip resize)
+            except tk.TclError:
+                pass
+        self._save_and_close()
+
+    def _save_and_close(self) -> None:
+        """Sauvegarde la note et ferme la fenêtre."""
+        try:
+            note = self._text.get("1.0", "end-1c").strip()
+            self._task_manager.set_current_note(note)
+        except tk.TclError:
+            pass
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------
-    # Drag (déplacer la fenêtre de note)
+    # Drag
     # ------------------------------------------------------------------
 
     def _drag_start(self, event: tk.Event) -> None:
@@ -151,9 +164,7 @@ class NoteWindow(tk.Toplevel):
         self._drag_y = event.y_root - self.winfo_y()
 
     def _drag_motion(self, event: tk.Event) -> None:
-        x = event.x_root - self._drag_x
-        y = event.y_root - self._drag_y
-        self.geometry(f"+{x}+{y}")
+        self.geometry(f"+{event.x_root - self._drag_x}+{event.y_root - self._drag_y}")
 
     # ------------------------------------------------------------------
     # Resize (coin bas-droite)
@@ -167,5 +178,5 @@ class NoteWindow(tk.Toplevel):
 
     def _resize_motion(self, event: tk.Event) -> None:
         new_w = max(220, self._resize_w0 + event.x_root - self._resize_x0)
-        new_h = max(140, self._resize_h0 + event.y_root - self._resize_y0)
+        new_h = max(120, self._resize_h0 + event.y_root - self._resize_y0)
         self.geometry(f"{new_w}x{new_h}")
