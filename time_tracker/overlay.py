@@ -4,11 +4,9 @@ Toujours au-dessus des autres fenêtres, sans barre de titre, absente de la barr
 Permet de voir la tâche en cours et de changer de tâche rapidement.
 Draggable via l'icône chronomètre, redimensionnable en largeur via la poignée droite.
 
-Utilise tk.Toplevel (et non CTkToplevel) pour éviter le problème de recréation
-du HWND Windows quand overrideredirect() est appelé sur une fenêtre déjà gérée
-par CTkToplevel : dans ce cas, les liaisons widget↔fenêtre sont perdues et
-le contenu disparaît. tk.Toplevel n'a pas ce setup différé et fonctionne
-fiablement avec overrideredirect dès __init__.
+Palette sombre fixe (indépendante du thème global de l'application).
+Utilise tk.Toplevel pour overrideredirect fiable, et after(10) pour deiconify
+après le démarrage du mainloop (sans ça les widgets sont créés mais pas peints).
 """
 
 import tkinter as tk
@@ -23,16 +21,29 @@ from .timer_engine import TimerEngine
 
 
 # Hauteur fixe de l'overlay en pixels
-_HEIGHT = 44
+_HEIGHT = 46
 
-# Option spéciale dans la liste déroulante
+# Option spéciale dans le menu déroulant
 _NEW_TASK_LABEL = "＋  Nouvelle tâche"
+
+# ── Palette sombre fixe ───────────────────────────────────────────────
+_BG          = "#1c1c1c"   # fond de la fenêtre
+_FRAME_BG    = "#262626"   # fond CTkFrame principal
+_ITEM_BG     = "#333333"   # fond OptionMenu / Entry
+_ACCENT      = "#3b82f6"   # bleu accent (bordure entry, hover dropdown)
+_HANDLE_BG   = "#3f3f3f"   # poignée de redimensionnement
+_BTN_BG      = "#404040"   # bouton flèche du menu
+_BTN_HOVER   = "#555555"   # hover bouton flèche
+_DD_BG       = "#1e1e1e"   # fond liste déroulante
+_TEXT        = "#e2e8f0"   # texte principal
+_TEXT_DIM    = "#94a3b8"   # placeholder
 
 
 class Overlay(tk.Toplevel):
     """
     Fenêtre flottante compacte affichant la tâche en cours et le timer.
     Se déplace par drag sur l'icône, se redimensionne en largeur par le bord droit.
+    En mode "nouvelle tâche" : l'OptionMenu est remplacé par une Entry inline.
     """
 
     def __init__(
@@ -54,17 +65,13 @@ class Overlay(tk.Toplevel):
         self._drag_x = self._drag_y = 0
         self._resize_x = 0
         self._resize_w = int(self._db.get_config("overlay_width", "340"))
-        self._ignore_combo = False
+        self._ignore_option = False
 
         # --- Configuration fenêtre ---
-        # Avec tk.Toplevel, overrideredirect(True) fonctionne immédiatement
-        # sans recréer le HWND, donc le contenu reste intact.
         self.withdraw()
         self.overrideredirect(True)
         self.attributes("-topmost", True)
-
-        # Couleur de fond identique au CTkFrame pour éviter les bords visibles
-        self._apply_bg_color()
+        self.configure(bg=_BG)
 
         ox = int(self._db.get_config("overlay_x", "100"))
         oy = int(self._db.get_config("overlay_y", "100"))
@@ -74,114 +81,149 @@ class Overlay(tk.Toplevel):
 
         self._build_ui()
         self._refresh_task_list()
-        self.deiconify()
-
-    # ------------------------------------------------------------------
-    # Couleur de fond
-    # ------------------------------------------------------------------
-
-    def _apply_bg_color(self) -> None:
-        """Applique la couleur de fond en accord avec le thème CTk courant."""
-        mode = ctk.get_appearance_mode()
-        # Couleur du CTkFrame utilisé comme fond de l'overlay
-        bg = "#242424" if mode == "Dark" else "#ebebeb"
-        self.configure(bg=bg)
+        # Deiconify via after() : les widgets ne sont peints que quand le mainloop tourne.
+        self.after(10, self.deiconify)
 
     # ------------------------------------------------------------------
     # Construction de l'interface
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        """Construit les widgets de l'overlay sur une seule ligne horizontale."""
-        # Fond principal — couvre toute la fenêtre
-        self._bg = ctk.CTkFrame(self, corner_radius=6, fg_color=("gray88", "gray17"))
-        self._bg.pack(fill="both", expand=True, padx=0, pady=0)
-        self._bg.columnconfigure(1, weight=1)  # la colonne du combo s'étend
+        """Construit l'interface complète de l'overlay."""
 
-        # -- Colonne 0 : icône (poignée de déplacement) --
-        self._icon_img = get_ctk_image(size=20)
-        self._icon_lbl = ctk.CTkLabel(
-            self._bg,
-            image=self._icon_img,
-            text="",
-            cursor="fleur",
-            width=28,
+        # Cadre principal
+        self._bg = ctk.CTkFrame(self, corner_radius=8, fg_color=_FRAME_BG)
+        self._bg.pack(fill="both", expand=True, padx=1, pady=1)
+
+        # -- Icône chronomètre : zone de drag (curseur main) --
+        icon_img = get_ctk_image(size=20)
+        icon_lbl = ctk.CTkLabel(
+            self._bg, image=icon_img, text="", width=28, cursor="hand2",
         )
-        self._icon_lbl.grid(row=0, column=0, padx=(6, 0), pady=0, sticky="ns")
-        self._icon_lbl.bind("<ButtonPress-1>", self._drag_start)
-        self._icon_lbl.bind("<B1-Motion>", self._drag_motion)
-        self._icon_lbl.bind("<ButtonRelease-1>", self._drag_end)
+        icon_lbl.pack(side="left", padx=(6, 2))
+        icon_lbl.bind("<ButtonPress-1>", self._drag_start)
+        icon_lbl.bind("<B1-Motion>", self._drag_motion)
+        icon_lbl.bind("<ButtonRelease-1>", self._drag_end)
+        icon_lbl._img = icon_img  # évite le garbage collection
 
-        # -- Colonne 1 : liste déroulante des tâches --
-        self._task_var = tk.StringVar()
-        self._combo = ctk.CTkComboBox(
-            self._bg,
-            variable=self._task_var,
-            values=[],
-            height=28,
-            command=self._on_task_selected,
-            font=ctk.CTkFont(size=12),
-        )
-        self._combo.grid(row=0, column=1, padx=6, pady=8, sticky="ew")
+        # -- Poignée de redimensionnement (côté droit, packée en premier) --
+        handle = tk.Frame(self._bg, width=6, cursor="size_we", bg=_HANDLE_BG)
+        handle.pack(side="right", fill="y")
+        handle.pack_propagate(False)
+        handle.bind("<ButtonPress-1>", self._resize_start)
+        handle.bind("<B1-Motion>", self._resize_motion)
+        handle.bind("<ButtonRelease-1>", self._resize_end)
 
-        # -- Colonne 2 : timer --
+        # -- Label timer (à gauche de la zone centrale) --
         self._timer_lbl = ctk.CTkLabel(
             self._bg,
-            text="00:00:00",
+            text="0h00m00s",
             font=ctk.CTkFont(size=13, weight="bold"),
-            width=80,
+            width=84,
             anchor="center",
+            text_color=_TEXT,
         )
-        self._timer_lbl.grid(row=0, column=2, padx=(0, 4), pady=0)
+        self._timer_lbl.pack(side="left", padx=(2, 4))
 
-        # -- Colonne 3 : poignée de redimensionnement --
-        self._grip = ctk.CTkFrame(
-            self._bg,
-            width=6,
-            corner_radius=0,
-            fg_color=("gray70", "gray30"),
-            cursor="size_we",
+        # -- Zone centrale : OptionMenu ↔ Entry nouvelle tâche --
+        self._center = ctk.CTkFrame(self._bg, fg_color="transparent")
+        self._center.pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        # Menu déroulant (lecture seule, pas de saisie clavier)
+        self._task_var = tk.StringVar(value=_NEW_TASK_LABEL)
+        self._option_menu = ctk.CTkOptionMenu(
+            self._center,
+            variable=self._task_var,
+            values=[_NEW_TASK_LABEL],
+            command=self._on_task_selected,
+            height=30,
+            fg_color=_ITEM_BG,
+            button_color=_BTN_BG,
+            button_hover_color=_BTN_HOVER,
+            text_color=_TEXT,
+            dropdown_fg_color=_DD_BG,
+            dropdown_text_color=_TEXT,
+            dropdown_hover_color=_ACCENT,
+            dynamic_resizing=False,
         )
-        self._grip.grid(row=0, column=3, padx=0, pady=0, sticky="ns")
-        self._grip.bind("<ButtonPress-1>", self._resize_start)
-        self._grip.bind("<B1-Motion>", self._resize_motion)
-        self._grip.bind("<ButtonRelease-1>", self._resize_end)
+        self._option_menu.pack(fill="x", expand=True)
 
-        # Drag depuis le fond (zones vides du frame)
-        self._bg.bind("<ButtonPress-1>", self._drag_start)
-        self._bg.bind("<B1-Motion>", self._drag_motion)
-        self._bg.bind("<ButtonRelease-1>", self._drag_end)
+        # Entry saisie nouvelle tâche (masquée par défaut)
+        self._new_task_entry = ctk.CTkEntry(
+            self._center,
+            placeholder_text="Nom de la tâche…",
+            height=30,
+            fg_color=_ITEM_BG,
+            border_color=_ACCENT,
+            border_width=2,
+            text_color=_TEXT,
+            placeholder_text_color=_TEXT_DIM,
+        )
+        self._new_task_entry.bind("<Return>", self._on_new_task_confirm)
+        self._new_task_entry.bind("<Escape>", self._on_new_task_cancel)
 
     # ------------------------------------------------------------------
-    # Gestion de la liste déroulante
+    # Mode saisie nouvelle tâche
+    # ------------------------------------------------------------------
+
+    def _show_entry_mode(self) -> None:
+        """Passe en mode saisie : masque le menu, affiche l'entry."""
+        self._option_menu.pack_forget()
+        self._new_task_entry.pack(fill="x", expand=True)
+        self._new_task_entry.delete(0, "end")
+        self._new_task_entry.focus_set()
+
+    def _show_option_mode(self) -> None:
+        """Repasse en mode sélection : masque l'entry, affiche le menu."""
+        self._new_task_entry.pack_forget()
+        self._option_menu.pack(fill="x", expand=True)
+
+    def _on_new_task_confirm(self, event=None) -> None:
+        """Valide la saisie d'une nouvelle tâche (touche Entrée)."""
+        name = self._new_task_entry.get().strip()
+        self._show_option_mode()
+        if not name:
+            return
+        try:
+            self._task_manager.start_task(name, "")
+        except ValueError:
+            pass
+        self._refresh_task_list()
+
+    def _on_new_task_cancel(self, event=None) -> None:
+        """Annule la saisie (touche Echap)."""
+        self._show_option_mode()
+
+    # ------------------------------------------------------------------
+    # Gestion du menu déroulant
     # ------------------------------------------------------------------
 
     def _refresh_task_list(self) -> None:
-        """Recharge la liste des tâches récentes dans le combo."""
+        """Recharge la liste des tâches récentes dans le menu."""
         names = self._task_manager.get_recent_task_names()
         values = [_NEW_TASK_LABEL] + names
-        self._combo.configure(values=values)
+        self._option_menu.configure(values=values)
 
         if self._timer.is_running:
             current, _ = self._timer.current_task
-            self._set_combo_value(current)
+            self._set_option_value(current)
         else:
-            self._set_combo_value(_NEW_TASK_LABEL)
+            self._set_option_value(_NEW_TASK_LABEL)
 
-    def _set_combo_value(self, value: str) -> None:
-        """Met à jour le combo sans déclencher le callback de changement."""
-        self._ignore_combo = True
+    def _set_option_value(self, value: str) -> None:
+        """Met à jour le menu sans déclencher le callback."""
+        self._ignore_option = True
         self._task_var.set(value)
-        self._ignore_combo = False
+        self._ignore_option = False
 
     def _on_task_selected(self, value: str) -> None:
-        """Appelé par CTkComboBox quand l'utilisateur sélectionne une option."""
-        if self._ignore_combo:
+        """Appelé par CTkOptionMenu quand l'utilisateur sélectionne une option."""
+        if self._ignore_option:
             return
         if value == _NEW_TASK_LABEL:
-            self._on_open_main()
+            # Passer en mode saisie inline au lieu d'ouvrir la fenêtre principale
+            self._show_entry_mode()
             return
-        # Récupérer le projet associé depuis l'historique
         tasks = self._task_manager.get_recent_tasks()
         match = next((t for t in tasks if t["name"] == value), None)
         project = match["project"] if match else ""
@@ -189,6 +231,18 @@ class Overlay(tk.Toplevel):
             self._task_manager.start_task(value, project)
         except ValueError:
             pass
+
+    # ------------------------------------------------------------------
+    # Formatage du timer
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _format_timer(elapsed: int) -> str:
+        """Retourne le temps au format XhMMmSSs (ex : 1h23m45s)."""
+        h = elapsed // 3600
+        m = (elapsed % 3600) // 60
+        s = elapsed % 60
+        return f"{h}h{m:02d}m{s:02d}s"
 
     # ------------------------------------------------------------------
     # Mise à jour depuis le thread timer
@@ -199,18 +253,18 @@ class Overlay(tk.Toplevel):
         self.after(0, self._update_display, elapsed, task_name)
 
     def _update_display(self, elapsed: int, task_name: str) -> None:
-        """Met à jour le label timer et synchronise la sélection du combo."""
-        self._timer_lbl.configure(text=TimerEngine.format_elapsed(elapsed))
+        """Met à jour le label timer et synchronise la sélection du menu."""
+        self._timer_lbl.configure(text=self._format_timer(elapsed))
         if self._task_var.get() != task_name:
-            self._set_combo_value(task_name)
+            self._set_option_value(task_name)
 
     def on_task_stopped(self) -> None:
         """Appelé depuis le thread principal quand le timer s'arrête."""
         self.after(0, self._on_stopped)
 
     def _on_stopped(self) -> None:
-        self._timer_lbl.configure(text="00:00:00")
-        self._set_combo_value(_NEW_TASK_LABEL)
+        self._timer_lbl.configure(text="0h00m00s")
+        self._set_option_value(_NEW_TASK_LABEL)
 
     def notify_task_list_changed(self) -> None:
         """Appelé quand la liste des tâches doit être rechargée."""

@@ -166,6 +166,7 @@ class App(ctk.CTk):
             btn_frame, text="▶  Démarrer",
             command=self._on_start,
             fg_color="#2563eb", hover_color="#1d4ed8",
+            text_color="white",
         )
         self._btn_start.grid(row=0, column=0, padx=4, pady=4, sticky="ew")
 
@@ -174,6 +175,7 @@ class App(ctk.CTk):
             command=self._on_pause,
             state="disabled",
             fg_color="#7c3aed", hover_color="#6d28d9",
+            text_color="white",
         )
         self._btn_pause.grid(row=0, column=1, padx=4, pady=4, sticky="ew")
 
@@ -182,13 +184,17 @@ class App(ctk.CTk):
             command=self._on_stop,
             state="disabled",
             fg_color="#dc2626", hover_color="#b91c1c",
+            text_color="white",
         )
         self._btn_stop.grid(row=0, column=2, padx=4, pady=4, sticky="ew")
 
         self._btn_new = ctk.CTkButton(
             btn_frame, text="＋  Nouvelle tâche",
             command=self._on_new_task,
-            fg_color=("gray75", "gray25"), hover_color=("gray65", "gray35"),
+            fg_color="transparent",
+            border_width=1,
+            border_color=("gray60", "gray50"),
+            hover_color=("gray80", "gray30"),
             text_color=("gray10", "gray90"),
         )
         self._btn_new.grid(row=1, column=0, columnspan=3, pady=(4, 0), sticky="ew")
