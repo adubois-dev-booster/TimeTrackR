@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Callable
 import customtkinter as ctk
 
 from ..core.database import Database
+from ..core.tag_utils import format_task_display
 from .icon import get_ctk_image, get_control_icons
 from ..core.task_manager import TaskManager
 from ..core.timer_engine import TimerEngine
@@ -195,7 +196,9 @@ class Overlay(tk.Toplevel):
         self._drag_x = self._drag_y = 0
         self._resize_x = 0
         self._resize_w = int(self._db.get_config("overlay_width", "340"))
-        self._current_task = _IDLE_LABEL
+        self._current_task      = _IDLE_LABEL   # chaîne d'affichage (nom + tags)
+        self._current_task_name = ""            # nom brut seul (pour comparaison tick)
+        self._task_map: dict[str, dict] = {}    # display_str → task dict
         self._note_win: "NoteWindow | None" = None
         self._dropdown: "_TaskDropdown | None" = None
         # Mémorise le dernier état connu pour éviter les configure() redondants
@@ -342,11 +345,20 @@ class Overlay(tk.Toplevel):
             self._dropdown = None
             return
 
-        names = self._task_manager.get_recent_task_names()
-        # Ne pas proposer la tâche déjà en cours
-        current = self._current_task if self._timer.is_running else None
-        filtered = [n for n in names if n != current]
-        values = [_NEW_TASK_LABEL] + filtered
+        tasks = self._task_manager.get_recent_tasks()
+        current_name = self._current_task_name if self._timer.is_running else None
+        current_tags = self._timer.current_tags if self._timer.is_running else ""
+
+        self._task_map = {}
+        display_items: list[str] = []
+        for t in tasks:
+            display = format_task_display(t["name"], t.get("tags", ""))
+            if t["name"] == current_name and t.get("tags", "") == current_tags:
+                continue
+            self._task_map[display] = t
+            display_items.append(display)
+
+        values = [_NEW_TASK_LABEL] + display_items
 
         bx = self._task_btn.winfo_rootx()
         by = self._task_btn.winfo_rooty() + self._task_btn.winfo_height() + 2
@@ -361,10 +373,12 @@ class Overlay(tk.Toplevel):
     # Affichage de la tâche courante
     # ------------------------------------------------------------------
 
-    def _set_task_display(self, value: str) -> None:
+    def _set_task_display(self, name: str, tags_str: str = "") -> None:
         """Met à jour le texte du bouton-tâche."""
-        self._current_task = value
-        self._task_btn.configure(text=value)
+        self._current_task_name = name
+        display = format_task_display(name, tags_str) if name != _IDLE_LABEL else name
+        self._current_task = display
+        self._task_btn.configure(text=display)
 
     # ------------------------------------------------------------------
     # Boutons play/pause et stop
@@ -435,12 +449,12 @@ class Overlay(tk.Toplevel):
         self._task_btn.pack(fill="x", expand=True)
 
     def _on_new_task_confirm(self, event=None) -> None:
-        name = self._new_task_entry.get().strip()
+        raw = self._new_task_entry.get().strip()
         self._show_task_mode()
-        if not name:
+        if not raw:
             return
         try:
-            self._task_manager.start_task(name, "")
+            self._task_manager.start_task(raw, "")
         except ValueError:
             pass
         self._refresh_task_list()
@@ -455,30 +469,29 @@ class Overlay(tk.Toplevel):
     def _refresh_task_list(self) -> None:
         """Synchronise l'affichage avec l'état courant du timer."""
         if self._timer.is_running:
-            current, _ = self._timer.current_task
-            self._set_task_display(current)
+            name, _ = self._timer.current_task
+            self._set_task_display(name, self._timer.current_tags)
         else:
             self._set_task_display(_IDLE_LABEL)
             self._update_control_buttons(running=False, paused=False)
 
-    def _on_task_dismissed(self, task_name: str) -> None:
+    def _on_task_dismissed(self, display: str) -> None:
         """Masque la tâche en base ; elle disparaît du dropdown à la prochaine ouverture."""
-        self._task_manager.hide_task(task_name)
+        task = self._task_map.get(display)
+        if task:
+            self._task_manager.hide_task(task["id"])
 
     def _on_task_selected(self, value: str) -> None:
         if value == _NEW_TASK_LABEL:
             self._show_entry_mode()
             return
-        # Ne rien faire si la tâche est déjà en cours
-        if self._timer.is_running:
-            current, _ = self._timer.current_task
-            if current == value:
-                return
-        tasks = self._task_manager.get_recent_tasks()
-        match = next((t for t in tasks if t["name"] == value), None)
-        project = match["project"] if match else ""
+        task = self._task_map.get(value)
+        if task is None:
+            return
         try:
-            self._task_manager.start_task(value, project)
+            self._task_manager.start_known_task(
+                task["name"], task.get("project", ""), task.get("tags", "")
+            )
         except ValueError:
             pass
 
@@ -491,9 +504,8 @@ class Overlay(tk.Toplevel):
 
     def _update_display(self, elapsed: int, task_name: str) -> None:
         self._timer_lbl.configure(text=TimerEngine.format_elapsed(elapsed))
-        if self._current_task != task_name:
-            self._set_task_display(task_name)
-        # Appel conditionnel uniquement si l'état change (pas chaque seconde)
+        if self._current_task_name != task_name:
+            self._set_task_display(task_name, self._timer.current_tags)
         self._update_control_buttons(running=True, paused=False)
 
     def on_task_stopped(self) -> None:
@@ -501,6 +513,7 @@ class Overlay(tk.Toplevel):
 
     def _on_stopped(self) -> None:
         self._timer_lbl.configure(text="")
+        self._current_task_name = ""
         self._set_task_display(_IDLE_LABEL)
         self._update_control_buttons(running=False, paused=False)
 

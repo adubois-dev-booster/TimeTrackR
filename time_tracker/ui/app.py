@@ -14,6 +14,7 @@ from typing import Callable
 import customtkinter as ctk
 
 from ..core.database import Database
+from ..core.tag_utils import format_task_display, str_to_tags
 from .icon import apply_icon_to_window, get_app_icons, get_ctk_image
 from ..core.task_manager import TaskManager
 from ..core.timer_engine import TimerEngine
@@ -35,6 +36,10 @@ _PAD_SESSION = (12, 4)
 # Bg de la TaskRow (doit correspondre à fg_color=("gray84","gray22"))
 _ROW_BG  = {"Dark": "#383838", "Light": "#D6D6D6"}
 _DAY_BG  = {"Dark": "#1e1e1e", "Light": "#ebebeb"}
+
+# Badges tags
+_TAG_BG  = ("#dbeafe", "#1e3a5f")   # fond du badge (clair / sombre)
+_TAG_FG  = ("#1d4ed8", "#93c5fd")   # texte du badge
 
 
 # ── Utilitaires ───────────────────────────────────────────────────────
@@ -72,12 +77,19 @@ def _group_by_day(sessions: list[dict]) -> dict[str, dict]:
         day = s["started_at"][:10]
         if day not in days:
             days[day] = {}
-        name = s["name"]
-        if name not in days[day]:
-            days[day][name] = {"project": s["project"], "sessions": [], "has_active": False}
-        days[day][name]["sessions"].append(s)
+        # Clé composite : même nom + tags différents = tâches distinctes
+        key = (s["name"], s.get("tags", ""))
+        if key not in days[day]:
+            days[day][key] = {
+                "name":       s["name"],
+                "project":    s["project"],
+                "tags":       s.get("tags", ""),
+                "sessions":   [],
+                "has_active": False,
+            }
+        days[day][key]["sessions"].append(s)
         if s["is_active"]:
-            days[day][name]["has_active"] = True
+            days[day][key]["has_active"] = True
     return days
 
 
@@ -176,11 +188,17 @@ class _StartTaskDialog(ctk.CTkToplevel):
         self._on_started   = on_started
         self._icons        = icons
 
+        self._recent_tasks = task_manager.get_recent_tasks()
+        display_names = [
+            format_task_display(t["name"], t.get("tags", ""))
+            for t in self._recent_tasks
+        ]
+
         ctk.CTkLabel(self, text="Tâche", anchor="w").pack(fill="x", padx=16, pady=(16, 2))
         self._task_var = tk.StringVar()
         self._task_cb  = ctk.CTkComboBox(
             self, variable=self._task_var,
-            values=task_manager.get_recent_task_names(),
+            values=display_names,
             command=self._on_task_changed,
         )
         self._task_cb.pack(fill="x", padx=16, pady=(0, 8))
@@ -214,18 +232,21 @@ class _StartTaskDialog(ctk.CTkToplevel):
     def _on_task_changed(self, value: str) -> None:
         if self._proj_var.get():
             return
-        tasks = self._task_manager.get_recent_tasks()
-        match = next((t for t in tasks if t["name"] == value), None)
+        match = next(
+            (t for t in self._recent_tasks
+             if format_task_display(t["name"], t.get("tags", "")) == value),
+            None,
+        )
         if match and match["project"]:
             self._proj_var.set(match["project"])
 
     def _confirm(self) -> None:
-        name    = self._task_var.get().strip()
+        raw     = self._task_var.get().strip()
         project = self._proj_var.get().strip()
-        if not name:
+        if not raw:
             return
         self.destroy()
-        self._on_started(name, project)
+        self._on_started(raw, project)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -304,6 +325,7 @@ class _TaskRow(tk.Frame):
         parent,
         task_name: str,
         project: str,
+        tags: str,
         sessions: list[dict],
         status: str,            # "running" | "paused" | ""
         on_start_task: Callable,
@@ -314,6 +336,7 @@ class _TaskRow(tk.Frame):
         self._sessions        = sessions
         self._task_name       = task_name
         self._project         = project
+        self._tags            = tags
         self._on_start        = on_start_task
         self._icons           = icons
         self._expanded        = False
@@ -321,13 +344,12 @@ class _TaskRow(tk.Frame):
 
         total = sum(s["duration_seconds"] for s in sessions)
 
-        # ── En-tête (CTkFrame uniquement pour lui — sa taille ne change pas
-        #            pendant l'animation, donc pas de re-rendu CTk) ────────
+        # ── En-tête ───────────────────────────────────────────────────
         self._hdr = ctk.CTkFrame(self, fg_color=("gray84", "gray22"),
                                   corner_radius=6, cursor="hand2")
         self._hdr.pack(fill="x")
 
-        # Droite d'abord pour que le nom remplisse l'espace restant
+        # Durée totale (droite d'abord pour que le reste remplisse l'espace)
         ctk.CTkLabel(
             self._hdr,
             text=TimerEngine.format_elapsed(total),
@@ -354,14 +376,26 @@ class _TaskRow(tk.Frame):
             font=ctk.CTkFont(size=_FONT_TASK, weight=weight),
             text_color=fg,
         )
-        self._name_lbl.pack(side="left", padx=(8, 4), pady=4, fill="x", expand=True)
+        self._name_lbl.pack(side="left", padx=(8, 4), pady=4)
+
+        # Badges tags
+        for tag in str_to_tags(tags):
+            ctk.CTkLabel(
+                self._hdr,
+                text=f"#{tag}",
+                font=ctk.CTkFont(size=11),
+                fg_color=_TAG_BG,
+                text_color=_TAG_FG,
+                corner_radius=4,
+                width=0,
+            ).pack(side="left", padx=(0, 4), pady=4, ipady=1)
 
         # Clic simple → toggle ; double-clic → démarrer
         self._hdr.bind("<ButtonPress-1>", self._on_row_click)
         self._name_lbl.bind("<ButtonPress-1>", self._on_row_click)
         self._name_lbl.bind(
             "<Double-Button-1>",
-            lambda e: self._on_start(task_name, project),
+            lambda e: self._on_start(task_name, project, tags),
         )
 
     # ── Clic ──────────────────────────────────────────────────────────
@@ -408,7 +442,7 @@ class _DayBlock(tk.Frame):
         self,
         parent,
         date_str: str,
-        tasks: dict[str, dict],
+        tasks: dict[tuple, dict],
         expanded: bool,
         is_today: bool,
         on_start_task: Callable,
@@ -485,21 +519,27 @@ class _DayBlock(tk.Frame):
         self._content.pack(fill="x", pady=(2, 0))
 
         running_name: str | None = None
+        running_tags: str = ""
         running_paused = False
         if self._timer.is_running:
             running_name, _ = self._timer.current_task
-            running_paused  = self._timer.is_paused
+            running_tags     = self._timer.current_tags
+            running_paused   = self._timer.is_paused
 
-        for task_name, info in self._tasks.items():
-            if info["has_active"] and task_name == running_name:
-                status = "paused" if running_paused else "running"
-            else:
-                status = ""
+        for task_key, info in self._tasks.items():
+            name, tags = task_key
+            is_running = (
+                info["has_active"]
+                and name == running_name
+                and tags == running_tags
+            )
+            status = ("paused" if running_paused else "running") if is_running else ""
 
             _TaskRow(
                 self._content,
-                task_name=task_name,
+                task_name=name,
                 project=info["project"],
+                tags=tags,
                 sessions=info["sessions"],
                 status=status,
                 on_start_task=self._on_start_task,
@@ -640,16 +680,36 @@ class App(ctk.CTk):
     # Démarrage de tâche
     # ------------------------------------------------------------------
 
-    def _request_start_task(self, name: str = "", project: str = "") -> None:
-        """Sans argument → dialogue. Avec nom → démarrage direct (double-clic)."""
+    def _request_start_task(self, name: str = "", project: str = "", tags: str = "") -> None:
+        """Sans argument → dialogue. Avec nom+tags → démarrage direct (double-clic)."""
         if name:
-            self._do_start_task(name, project)
+            self._do_start_known_task(name, project, tags)
         else:
-            _StartTaskDialog(self, self._task_manager, self._do_start_task, self._app_icons)
+            _StartTaskDialog(self, self._task_manager, self._do_start_raw_task, self._app_icons)
 
-    def _do_start_task(self, name: str, project: str) -> None:
+    def _do_start_known_task(self, name: str, project: str, tags: str) -> None:
+        """Démarrage direct depuis l'historique (tâche déjà identifiée)."""
         try:
-            self._task_manager.start_task(name, project)
+            self._task_manager.start_known_task(name, project, tags)
+        except ValueError:
+            pass
+        self.after(100, self._refresh_history)
+
+    def _do_start_raw_task(self, raw: str, project: str) -> None:
+        """Démarrage depuis la dialog (saisie brute, peut contenir des #tags)."""
+        # Cherche si raw correspond à un display string connu
+        tasks = self._task_manager.get_recent_tasks()
+        match = next(
+            (t for t in tasks if format_task_display(t["name"], t.get("tags", "")) == raw),
+            None,
+        )
+        try:
+            if match:
+                self._task_manager.start_known_task(
+                    match["name"], project or match["project"], match.get("tags", "")
+                )
+            else:
+                self._task_manager.start_task(raw, project)
         except ValueError:
             pass
         self.after(100, self._refresh_history)

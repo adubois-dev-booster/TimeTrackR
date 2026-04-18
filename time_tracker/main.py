@@ -13,6 +13,7 @@ import pystray
 from .core.database import Database
 from .core.idle_detector import IdleDetector
 from .core.reminder import Reminder
+from .core.tag_utils import format_task_display
 from .core.task_manager import TaskManager
 from .core.timer_engine import TimerEngine
 from .ui.app import App
@@ -270,7 +271,8 @@ class TimeTrackRApp:
         if not self._timer.is_running or self._timer.is_paused:
             return
         self._timer.pause()
-        original_task, _ = self._timer.current_task
+        _orig_name, _    = self._timer.current_task
+        original_task    = format_task_display(_orig_name, self._timer.current_tags)
         recent_tasks     = self._task_manager.get_recent_task_names()
         self._notifier.notify_idle(
             idle_seconds,

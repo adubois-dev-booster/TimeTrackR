@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git --version)",
+      "Bash(git config *)",
+      "Bash(venv/Scripts/python.exe -c ' *)",
+      "Bash(cp time_tracker/database.py time_tracker/core/database.py)",
+      "Bash(cp time_tracker/timer_engine.py time_tracker/core/timer_engine.py)",
+      "Bash(cp time_tracker/task_manager.py time_tracker/core/task_manager.py)",
+      "Bash(cp time_tracker/idle_detector.py time_tracker/core/idle_detector.py)",
+      "Bash(cp time_tracker/reminder.py time_tracker/core/reminder.py)",
+      "Bash(sed -i 's/from \\\\.database import Database/from ..core.database import Database/' time_tracker/ui/app.py time_tracker/ui/overlay.py time_tracker/ui/settings_window.py)",
+      "Bash(sed -i 's/from \\\\.task_manager import TaskManager/from ..core.task_manager import TaskManager/' time_tracker/ui/app.py time_tracker/ui/overlay.py time_tracker/ui/note_window.py)",
+      "Bash(sed -i 's/from \\\\.timer_engine import TimerEngine/from ..core.timer_engine import TimerEngine/' time_tracker/ui/app.py time_tracker/ui/overlay.py)",
+      "Bash(sed -i 's/from \\\\.icon import apply_icon_to_window, get_ctk_image/from .icon import apply_icon_to_window, get_ctk_image/' time_tracker/ui/app.py)",
+      "Bash(\"/c/Users/AdrienDubois/AppData/Local/Programs/Python/Python312/python.exe\" -)",
+      "Bash(venv/Scripts/python.exe -c \"from time_tracker.main import TimeTrackRApp; print\\('imports OK'\\)\")",
+      "Bash(venv/Scripts/python.exe -c \"from time_tracker.main import TimeTrackRApp; print\\('OK'\\)\")",
+      "Bash(venv\\\\Scripts\\\\python.exe -c \"from time_tracker.core.tag_utils import *; print\\(parse_task_input\\('#monclient faire le site #web'\\)\\); print\\(format_task_display\\('faire le site', 'monclient,web'\\)\\); print\\(display_to_name_tags\\('faire le site  [monclient] [web]'\\)\\)\")",
+      "Bash(\"venv/Scripts/python.exe\" -c \"from time_tracker.core.tag_utils import *; print\\(parse_task_input\\('#monclient faire le site #web'\\)\\); print\\(format_task_display\\('faire le site', 'monclient,web'\\)\\); print\\(display_to_name_tags\\('faire le site  [monclient] [web]'\\)\\)\")"
+    ]
+  }
+}

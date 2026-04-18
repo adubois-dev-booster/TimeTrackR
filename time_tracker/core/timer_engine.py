@@ -36,6 +36,8 @@ class TimerEngine:
         self._paused = False
         self._task_name = ""
         self._project = ""
+        self._tags = ""
+        self._task_id: int | None = None
         self._session_id: int | None = None
         self._elapsed_seconds = 0
         self._started_at: datetime | None = None
@@ -49,7 +51,7 @@ class TimerEngine:
     # Contrôles publics (thread-safe)
     # ------------------------------------------------------------------
 
-    def start(self, task_name: str, project: str, resume_session_id: int | None = None, resume_elapsed: int = 0) -> None:
+    def start(self, task_name: str, project: str, tags: str = "", resume_session_id: int | None = None, resume_elapsed: int = 0) -> None:
         """
         Démarre (ou reprend) le timer pour une tâche.
         Si resume_session_id est fourni, on reprend une session existante
@@ -62,6 +64,7 @@ class TimerEngine:
 
             self._task_name = task_name
             self._project = project
+            self._tags = tags
             self._elapsed_seconds = resume_elapsed
             self._started_at = datetime.now()
             self._paused = False
@@ -69,12 +72,10 @@ class TimerEngine:
             self._last_autosave = 0
 
             if resume_session_id is not None:
-                # Reprise d'une session existante
                 self._session_id = resume_session_id
             else:
-                # Nouvelle session en base
-                task_id = self._db.get_or_create_task(task_name, project)
-                self._session_id = self._db.save_session(task_id, self._started_at)
+                self._task_id = self._db.get_or_create_task(task_name, project, tags)
+                self._session_id = self._db.save_session(self._task_id, self._started_at)
 
     def pause(self) -> None:
         """Met le timer en pause (la session reste active en base)."""
@@ -99,9 +100,11 @@ class TimerEngine:
                 self._running = False
                 self._paused = False
                 self._session_id = None
+                self._task_id = None
                 self._elapsed_seconds = 0
                 self._task_name = ""
                 self._project = ""
+                self._tags = ""
 
     def add_elapsed(self, extra_seconds: int) -> None:
         """Ajoute du temps à l'elapsed sans relancer le timer (thread-safe)."""
@@ -143,6 +146,16 @@ class TimerEngine:
         """Retourne (nom_tâche, projet)."""
         with self._lock:
             return self._task_name, self._project
+
+    @property
+    def current_tags(self) -> str:
+        with self._lock:
+            return self._tags
+
+    @property
+    def current_task_id(self) -> int | None:
+        with self._lock:
+            return self._task_id
 
     @property
     def session_id(self) -> int | None:

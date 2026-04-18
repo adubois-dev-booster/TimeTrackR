@@ -71,34 +71,41 @@ class Database:
                     "ALTER TABLE sessions ADD COLUMN note TEXT NOT NULL DEFAULT ''"
                 )
             except sqlite3.OperationalError:
-                pass  # Colonne déjà présente
+                pass
             # v3 : colonne hidden sur les tâches (masquage dans le dropdown overlay)
             try:
                 conn.execute(
                     "ALTER TABLE tasks ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
                 )
             except sqlite3.OperationalError:
-                pass  # Colonne déjà présente
+                pass
+            # v4 : tags sur les tâches
+            try:
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''"
+                )
+            except sqlite3.OperationalError:
+                pass
 
     # ------------------------------------------------------------------
     # Tâches
     # ------------------------------------------------------------------
 
-    def get_or_create_task(self, name: str, project: str) -> int:
+    def get_or_create_task(self, name: str, project: str, tags: str = "") -> int:
         """
-        Retourne l'id de la tâche existante (même nom + projet)
+        Retourne l'id de la tâche existante (même nom + projet + tags)
         ou en crée une nouvelle si elle n'existe pas.
         """
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT id FROM tasks WHERE name = ? AND project = ?",
-                (name, project),
+                "SELECT id FROM tasks WHERE name = ? AND project = ? AND tags = ?",
+                (name, project, tags),
             ).fetchone()
             if row:
                 return row["id"]
             cur = conn.execute(
-                "INSERT INTO tasks (name, project, created_at) VALUES (?, ?, ?)",
-                (name, project, datetime.now().isoformat()),
+                "INSERT INTO tasks (name, project, tags, created_at) VALUES (?, ?, ?, ?)",
+                (name, project, tags, datetime.now().isoformat()),
             )
             return cur.lastrowid
 
@@ -110,7 +117,7 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT t.id, t.name, t.project, MAX(s.started_at) AS last_used
+                SELECT t.id, t.name, t.project, t.tags, MAX(s.started_at) AS last_used
                 FROM tasks t
                 JOIN sessions s ON s.task_id = t.id
                 WHERE t.hidden = 0
@@ -122,12 +129,12 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
-    def add_retroactive_session(self, task_name: str, project: str, duration_seconds: int) -> None:
+    def add_retroactive_session(self, task_name: str, project: str, duration_seconds: int, tags: str = "") -> None:
         """
         Crée une session passée pour réaffecter du temps (ex : temps inactif).
         started_at = maintenant - duration_seconds, ended_at = maintenant.
         """
-        task_id    = self.get_or_create_task(task_name, project)
+        task_id    = self.get_or_create_task(task_name, project, tags)
         now        = datetime.now()
         started_at = now - timedelta(seconds=duration_seconds)
         with self._connect() as conn:
@@ -140,19 +147,15 @@ class Database:
                 (task_id, started_at.isoformat(), now.isoformat(), duration_seconds),
             )
 
-    def hide_task(self, task_name: str) -> None:
+    def hide_task(self, task_id: int) -> None:
         """Masque une tâche du dropdown overlay (les sessions sont conservées)."""
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE tasks SET hidden = 1 WHERE name = ?", (task_name,)
-            )
+            conn.execute("UPDATE tasks SET hidden = 1 WHERE id = ?", (task_id,))
 
-    def unhide_task(self, task_name: str) -> None:
+    def unhide_task(self, task_id: int) -> None:
         """Remet une tâche masquée dans la liste du dropdown."""
         with self._connect() as conn:
-            conn.execute(
-                "UPDATE tasks SET hidden = 0 WHERE name = ?", (task_name,)
-            )
+            conn.execute("UPDATE tasks SET hidden = 0 WHERE id = ?", (task_id,))
 
     # ------------------------------------------------------------------
     # Sessions
@@ -195,12 +198,12 @@ class Database:
                 )
 
     def get_today_sessions(self) -> list[dict]:
-        """Retourne toutes les sessions du jour avec le nom, projet et note de la tâche."""
+        """Retourne toutes les sessions du jour avec le nom, projet, tags et note de la tâche."""
         today = datetime.now().date().isoformat()
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT s.id, t.name, t.project,
+                SELECT s.id, t.name, t.project, t.tags,
                        s.started_at, s.ended_at,
                        s.duration_seconds, s.is_active, s.note
                 FROM sessions s
@@ -232,7 +235,7 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT s.id, t.name, t.project,
+                SELECT s.id, t.name, t.project, t.tags,
                        s.started_at, s.ended_at,
                        s.duration_seconds, s.is_active, s.note
                 FROM sessions s
@@ -249,7 +252,7 @@ class Database:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT s.id, t.name, t.project,
+                SELECT s.id, t.name, t.project, t.tags,
                        s.started_at, s.ended_at,
                        s.duration_seconds, s.is_active, s.note
                 FROM sessions s
@@ -270,7 +273,7 @@ class Database:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT s.id, t.name, t.project,
+                SELECT s.id, t.name, t.project, t.tags,
                        s.started_at, s.duration_seconds
                 FROM sessions s
                 JOIN tasks t ON t.id = s.task_id
