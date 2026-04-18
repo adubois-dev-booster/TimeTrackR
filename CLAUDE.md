@@ -24,19 +24,29 @@ Python 3.12 est installé dans `C:\Users\AdrienDubois\AppData\Local\Programs\Pyt
 
 ## Architecture
 
-Tous les fichiers sont dans `time_tracker/` :
+`time_tracker/main.py` : point d'entrée. `TimeTrackRApp` orchestre tous les composants, gère le tray pystray (thread séparé) et la boucle Tkinter (thread principal).
+
+### `time_tracker/core/` — logique métier (pas de Tkinter)
 
 | Fichier | Rôle |
 |---|---|
-| `main.py` | Point d'entrée. Classe `TimeTrackRApp` orchestre tous les composants, gère le tray pystray (thread séparé) et la boucle Tkinter (thread principal). |
-| `app.py` | Fenêtre CustomTkinter. Se cache dans le tray ou quitte selon `close_to_tray` (config DB). Mises à jour depuis d'autres threads via `after()`. |
-| `settings_window.py` | `CTkToplevel` modale, singleton. Sections **Application** (démarrage Windows via `winreg` + fermeture tray) et **Rappels** (idle + durée tâche). Sauvegarde en base puis émet `<<SettingsChanged>>` sur la fenêtre parente. |
-| `timer_engine.py` | Thread daemon qui incrémente `_elapsed_seconds` toutes les secondes, appelle `tick_callback`, et sauvegarde en base toutes les 30 s (`AUTOSAVE_INTERVAL`). Toutes les mutations d'état passent par `self._lock`. |
-| `task_manager.py` | Façade entre `Database`, `TimerEngine` et l'UI. Gère le démarrage/arrêt de tâches et la reprise de session au démarrage. |
 | `database.py` | SQLite dans `%APPDATA%/TimeTracker/timetracker.db`. Tables : `tasks`, `sessions` (avec `is_active` pour détecter les sessions orphelines), `config`. |
+| `timer_engine.py` | Thread daemon qui incrémente `_elapsed_seconds` toutes les secondes, appelle `tick_callback`, et sauvegarde en base toutes les 30 s (`AUTOSAVE_INTERVAL`). Toutes les mutations d'état passent par `self._lock`. |
+| `task_manager.py` | Façade entre `Database`, `TimerEngine` et l'UI. Gère démarrage/arrêt, reprise au démarrage, et les trois cas d'inactivité (`handle_idle_resume`, `handle_idle_credit_and_resume`, `handle_idle_switch_task`). |
 | `idle_detector.py` | Thread daemon, vérifie `GetLastInputInfo` toutes les 30 s, déclenche `on_idle_callback` une seule fois par période d'inactivité. |
 | `reminder.py` | Thread daemon, vérifie toutes les 10 s si `elapsed - last_reminder_at >= interval`. Réinitialisé via `reset()` à chaque nouvelle tâche. |
-| `notifier.py` | `InteractableWindowsToaster` (obligatoire pour les boutons). `Toast(text_fields=[title, body], actions=[ToastButton(...)])`. |
+
+### `time_tracker/ui/` — interface (Tkinter / CustomTkinter)
+
+| Fichier | Rôle |
+|---|---|
+| `theme.py` | **Source unique** pour toutes les couleurs, tailles de police et dimensions de fenêtre. Modifier ici pour changer l'apparence. |
+| `icon.py` | Icône chronomètre dessinée programmatiquement via `create_icon(size)`. |
+| `app.py` | Fenêtre CustomTkinter principale. Se cache dans le tray ou quitte selon `close_to_tray` (config DB). Mises à jour depuis d'autres threads via `after()`. |
+| `overlay.py` | Fenêtre flottante borderless (toujours au premier plan). Dropdown de tâches avec `_TaskDropdown(tk.Toplevel)`. |
+| `notifier.py` | Dialog d'inactivité (`_IdleDialog`) et rappel de durée (`_ReminderPopup`). Le dropdown de la dialog d'inactivité utilise `_SimpleDropdown` (même pattern que l'overlay). |
+| `note_window.py` | Fenêtre de note flottante, redimensionnable. |
+| `settings_window.py` | `CTkToplevel` modale, singleton. Sauvegarde en base puis émet `<<SettingsChanged>>` sur la fenêtre parente. |
 
 ## Règles importantes
 

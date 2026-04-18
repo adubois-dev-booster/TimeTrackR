@@ -103,6 +103,12 @@ class TimerEngine:
                 self._task_name = ""
                 self._project = ""
 
+    def add_elapsed(self, extra_seconds: int) -> None:
+        """Ajoute du temps à l'elapsed sans relancer le timer (thread-safe)."""
+        with self._lock:
+            if self._running:
+                self._elapsed_seconds += extra_seconds
+
     def toggle_pause(self) -> bool:
         """Bascule pause/reprise. Retourne True si le timer est maintenant en pause."""
         with self._lock:
@@ -192,8 +198,15 @@ class TimerEngine:
 
     @staticmethod
     def format_elapsed(seconds: int) -> str:
-        """Convertit un nombre de secondes en chaîne HH:MM:SS."""
+        """
+        Durée compacte : omet les heures si nulles, les minutes si nulles.
+        Exemples : 12s · 23m12s · 1h05m30s
+        """
         h = seconds // 3600
         m = (seconds % 3600) // 60
         s = seconds % 60
-        return f"{h:02d}:{m:02d}:{s:02d}"
+        if h > 0:
+            return f"{h}h{m:02d}m{s:02d}s"
+        if m > 0:
+            return f"{m}m{s:02d}s"
+        return f"{s}s"

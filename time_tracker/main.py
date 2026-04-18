@@ -5,19 +5,20 @@ et fait tourner l'icône tray en arrière-plan.
 """
 
 import ctypes
+import queue
 import tkinter as tk
 
 import pystray
 
-from .app import App
-from .database import Database
-from .icon import create_icon
-from .idle_detector import IdleDetector
-from .notifier import Notifier
-from .overlay import Overlay
-from .reminder import Reminder
-from .task_manager import TaskManager
-from .timer_engine import TimerEngine
+from .core.database import Database
+from .core.idle_detector import IdleDetector
+from .core.reminder import Reminder
+from .core.task_manager import TaskManager
+from .core.timer_engine import TimerEngine
+from .ui.app import App
+from .ui.icon import create_icon
+from .ui.notifier import Notifier
+from .ui.overlay import Overlay
 
 
 # ------------------------------------------------------------------
@@ -47,6 +48,9 @@ class TimeTrackRApp:
     def __init__(self):
         _set_app_id()
 
+        # File thread-safe pour les appels UI depuis des threads non-principaux
+        self._ui_queue: queue.SimpleQueue = queue.SimpleQueue()
+
         # --- Couche persistance ---
         self._db = Database()
 
@@ -55,9 +59,6 @@ class TimeTrackRApp:
 
         # --- Gestionnaire de tâches ---
         self._task_manager = TaskManager(self._db, self._timer)
-
-        # --- Notificateur ---
-        self._notifier = Notifier()
 
         # --- Détecteur d'inactivité ---
         idle_minutes = int(self._db.get_config("idle_minutes", "10"))
@@ -73,6 +74,7 @@ class TimeTrackRApp:
             self._reminder.disable()
 
         # --- Fenêtre principale (cachée au démarrage) ---
+        # Note : App doit être créée avant Notifier (Notifier a besoin du parent Tk)
         self._app = App(
             task_manager=self._task_manager,
             timer_engine=self._timer,
@@ -81,6 +83,13 @@ class TimeTrackRApp:
             on_quit_requested=self._quit,
         )
         self._app.bind("<<SettingsChanged>>", self._on_settings_changed)
+        # Drain de la file UI déclenché par event_generate depuis n'importe quel thread
+        self._app.bind("<<UITask>>", lambda e: self._drain_ui_queue())
+        # Polling de secours : garantit le drain même si event_generate est manqué
+        self._app.after(100, self._poll_ui_queue)
+
+        # --- Notificateur (après App car nécessite une fenêtre Tk parente) ---
+        self._notifier = Notifier(self._app)
 
         # --- Overlay (créé ici, affiché après mainloop) ---
         self._overlay = Overlay(
@@ -101,21 +110,37 @@ class TimeTrackRApp:
 
     def _check_resumable_session(self) -> None:
         """Vérifie s'il existe une session non terminée et propose la reprise."""
+        from datetime import date as _date
         session = self._task_manager.get_resumable_session()
         if session is None:
             return
 
-        duree = TimerEngine.format_elapsed(session["duration_seconds"])
-        reponse = tk.messagebox.askyesno(
-            "Reprendre la session ?",
-            f"Une session était en cours :\n\n"
-            f"  Tâche  : {session['name']}\n"
-            f"  Durée  : {duree}\n\n"
-            f"Voulez-vous la reprendre ?",
-            parent=self._app,
-        )
+        new_day = session["started_at"][:10] != _date.today().isoformat()
+        duree   = TimerEngine.format_elapsed(session["duration_seconds"])
+
+        if new_day:
+            msg = (
+                f"Une session d'un jour précédent était en cours :\n\n"
+                f"  Tâche  : {session['name']}\n"
+                f"  Durée  : {duree}\n\n"
+                f"Voulez-vous continuer cette tâche aujourd'hui ?"
+            )
+        else:
+            msg = (
+                f"Une session était en cours :\n\n"
+                f"  Tâche  : {session['name']}\n"
+                f"  Durée  : {duree}\n\n"
+                f"Voulez-vous la reprendre ?"
+            )
+
+        reponse = tk.messagebox.askyesno("Reprendre la session ?", msg, parent=self._app)
+
         if reponse:
-            self._task_manager.resume_last_session(session)
+            self._task_manager.discard_last_session(session)
+            if new_day:
+                self._task_manager.start_task(session["name"], session["project"])
+            else:
+                self._task_manager.resume_last_session(session)
             self._app.restore_running_state(session["name"], session["project"])
             self._overlay.notify_task_list_changed()
         else:
@@ -156,42 +181,75 @@ class TimeTrackRApp:
             self._tray_icon.title = "TimeTrackR — En attente"
 
     # ------------------------------------------------------------------
-    # Callbacks tray
+    # File UI thread-safe (tray + timer → thread principal)
+    # ------------------------------------------------------------------
+
+    def _ui_call(self, fn) -> None:
+        """
+        Enfile fn pour exécution sur le thread principal.
+        Thread-safe : event_generate() poste dans la queue Tk native.
+        """
+        self._ui_queue.put(fn)
+        try:
+            self._app.event_generate("<<UITask>>", when="tail")
+        except Exception:
+            pass  # Drainé par le polling de toute façon
+
+    def _drain_ui_queue(self) -> None:
+        while True:
+            try:
+                self._ui_queue.get_nowait()()
+            except queue.Empty:
+                break
+
+    def _poll_ui_queue(self) -> None:
+        """Polling de secours toutes les 100 ms."""
+        self._drain_ui_queue()
+        try:
+            self._app.after(100, self._poll_ui_queue)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Callbacks tray (thread pystray → thread principal via _ui_call)
     # ------------------------------------------------------------------
 
     def _show_window(self, icon=None, item=None) -> None:
         """Affiche la fenêtre principale."""
-        self._app.after(0, self._app.show)
+        self._ui_call(self._app.show)
 
     def _show_settings(self, icon=None, item=None) -> None:
         """Ouvre la fenêtre des paramètres depuis le tray."""
-        self._app.after(0, self._app.open_settings)
+        self._ui_call(self._app.open_settings)
 
     def _tray_toggle_pause(self, icon=None, item=None) -> None:
         self._timer.toggle_pause()
 
     def _tray_stop(self, icon=None, item=None) -> None:
         self._task_manager.stop_task()
-        self._app.after(0, self._app._on_stop)
-        self._app.after(0, self._overlay.on_task_stopped)
+        self._ui_call(self._app._on_stop)
+        self._ui_call(self._overlay.on_task_stopped)
 
     def _handle_overlay_stop(self) -> None:
-        """Arrêt déclenché depuis le bouton ⏹ de l'overlay : met à jour la fenêtre principale."""
-        # stop_task() est déjà appelé par l'overlay ; on propage juste la mise à jour UI
+        """Arrêt déclenché depuis le bouton ⏹ de l'overlay (thread principal)."""
         self._app.after(0, self._app._on_stop)
 
     def _quit(self, icon=None, item=None) -> None:
         """Fermeture propre : sauvegarde finale, arrêt du timer, destruction Tkinter."""
         if self._timer.is_running:
             self._timer.stop()
-        self._app.after(0, self._app.destroy)
+        self._ui_call(self._app.destroy)
 
     # ------------------------------------------------------------------
-    # Callback tick timer (thread timer → UI)
+    # Callback tick timer (thread timer → thread principal via _ui_call)
     # ------------------------------------------------------------------
 
     def _on_tick(self, elapsed: int, task_name: str, project: str) -> None:
-        """Propage le tick vers la fenêtre principale et l'overlay."""
+        """Redirige le tick vers le thread principal."""
+        self._ui_call(lambda: self._on_tick_ui(elapsed, task_name, project))
+
+    def _on_tick_ui(self, elapsed: int, task_name: str, project: str) -> None:
+        """Exécuté sur le thread principal : propage le tick vers l'UI."""
         try:
             self._app.on_timer_tick(elapsed, task_name, project)
         except Exception:
@@ -212,22 +270,45 @@ class TimeTrackRApp:
         if not self._timer.is_running or self._timer.is_paused:
             return
         self._timer.pause()
+        original_task, _ = self._timer.current_task
+        recent_tasks     = self._task_manager.get_recent_task_names()
         self._notifier.notify_idle(
             idle_seconds,
             on_resume=self._resume_from_idle,
             on_stop=self._stop_from_idle,
+            original_task=original_task,
+            recent_tasks=recent_tasks,
+            on_other_continue=self._switch_to_other_task,
+            on_other_resume_old=self._credit_and_resume,
         )
 
     def _resume_from_idle(self) -> None:
-        self._timer.resume()
+        """Même tâche → reprise simple."""
+        self._task_manager.handle_idle_resume()
         self._idle_detector.reset()
         self._app.after(0, lambda: self._app._update_button_states(running=True, paused=False))
 
     def _stop_from_idle(self) -> None:
+        """Arrêt depuis la dialog d'inactivité."""
         self._task_manager.stop_task()
         self._idle_detector.reset()
         self._app.after(0, self._app._on_stop)
         self._app.after(0, self._overlay.on_task_stopped)
+
+    def _switch_to_other_task(self, task_name: str, idle_seconds: int) -> None:
+        """Continue sur une autre tâche : session A backdatée, session B depuis idle_start."""
+        self._task_manager.handle_idle_switch_task(task_name, idle_seconds)
+        self._idle_detector.reset()
+        self._app.after(0, lambda: self._app._update_button_states(running=True, paused=False))
+        self._app.after(0, self._app._refresh_history)
+        self._app.after(0, self._overlay.notify_task_list_changed)
+
+    def _credit_and_resume(self, task_name: str, idle_seconds: int) -> None:
+        """Crédite l'inactivité sur task_name, puis reprend la tâche d'origine."""
+        self._task_manager.handle_idle_credit_and_resume(task_name, idle_seconds)
+        self._idle_detector.reset()
+        self._app.after(0, lambda: self._app._update_button_states(running=True, paused=False))
+        self._app.after(0, self._app._refresh_history)
 
     def _on_reminder(self, elapsed: int, task_name: str) -> None:
         self._notifier.notify_reminder(

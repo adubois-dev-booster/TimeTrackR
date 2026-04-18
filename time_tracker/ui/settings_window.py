@@ -13,7 +13,7 @@ from tkinter import messagebox
 
 import customtkinter as ctk
 
-from .database import Database
+from ..core.database import Database
 
 
 # ------------------------------------------------------------------

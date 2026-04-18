@@ -3,6 +3,8 @@ Gestion des tâches et projets : création, sélection, reprise au démarrage.
 Fournit l'historique des tâches récentes pour l'autocomplétion de l'UI.
 """
 
+from datetime import datetime, timedelta
+
 from .database import Database
 from .timer_engine import TimerEngine
 
@@ -25,12 +27,14 @@ class TaskManager:
         """
         Démarre une nouvelle session pour la tâche donnée.
         Arrête proprement la session courante si une est en cours.
+        Si la tâche était masquée du dropdown, elle est automatiquement remise visible.
         """
         task_name = task_name.strip()
         project = project.strip()
         if not task_name:
             raise ValueError("Le nom de la tâche ne peut pas être vide.")
         self._timer.start(task_name, project)
+        self._db.unhide_task(task_name)
 
     def stop_task(self) -> None:
         """Arrête le timer et ferme la session courante."""
@@ -109,6 +113,51 @@ class TaskManager:
     def get_recent_tasks(self, limit: int = 10) -> list[dict]:
         """Retourne les tâches récentes complètes (nom + projet)."""
         return self._db.get_recent_tasks(limit)
+
+    def hide_task(self, task_name: str) -> None:
+        """Masque la tâche du dropdown overlay (sessions conservées en base)."""
+        self._db.hide_task(task_name)
+
+    # ------------------------------------------------------------------
+    # Gestion de l'inactivité
+    # ------------------------------------------------------------------
+
+    def handle_idle_resume(self) -> None:
+        """Même tâche, reprise simple sans modification de session."""
+        self._timer.resume()
+
+    def handle_idle_credit_and_resume(self, task_name: str, idle_seconds: int) -> None:
+        """
+        Crédite l'inactivité sur task_name, puis reprend la tâche d'origine.
+        - task_name == tâche d'origine : étend la session courante (pas de nouvelle session).
+        - task_name != tâche d'origine : crée une session rétroactive pour task_name.
+        """
+        original_task, _ = self._timer.current_task
+        if task_name == original_task:
+            self._timer.add_elapsed(idle_seconds)
+        else:
+            self._db.add_retroactive_session(task_name, "", idle_seconds)
+        self._timer.resume()
+
+    def handle_idle_switch_task(self, task_name: str, idle_seconds: int) -> None:
+        """
+        Était sur B pendant l'inactivité, continue sur B.
+        Session A backdatée au début de l'inactivité ; session B démarre depuis ce même instant
+        (une seule session B, pas de doublons).
+        """
+        elapsed_A    = self._timer.elapsed_seconds
+        session_A_id = self._timer.session_id
+        idle_start   = datetime.now() - timedelta(seconds=idle_seconds)
+
+        self._timer.stop()
+
+        if session_A_id is not None:
+            self._db.update_session(session_A_id, elapsed_A, ended_at=idle_start, is_active=False)
+
+        task_id_B    = self._db.get_or_create_task(task_name, "")
+        session_B_id = self._db.save_session(task_id_B, started_at=idle_start)
+        self._db.unhide_task(task_name)
+        self._timer.start(task_name, "", resume_session_id=session_B_id, resume_elapsed=idle_seconds)
 
     # ------------------------------------------------------------------
     # Notes de session

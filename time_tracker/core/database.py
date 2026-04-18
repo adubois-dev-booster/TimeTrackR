@@ -5,7 +5,7 @@ Le fichier .db est stocké dans %APPDATA%/TimeTracker/timetracker.db
 
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 
@@ -72,6 +72,13 @@ class Database:
                 )
             except sqlite3.OperationalError:
                 pass  # Colonne déjà présente
+            # v3 : colonne hidden sur les tâches (masquage dans le dropdown overlay)
+            try:
+                conn.execute(
+                    "ALTER TABLE tasks ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError:
+                pass  # Colonne déjà présente
 
     # ------------------------------------------------------------------
     # Tâches
@@ -98,7 +105,7 @@ class Database:
     def get_recent_tasks(self, limit: int = 10) -> list[dict]:
         """
         Retourne les <limit> tâches les plus récemment utilisées
-        (triées par dernière session).
+        (triées par dernière session, les tâches masquées exclues).
         """
         with self._connect() as conn:
             rows = conn.execute(
@@ -106,6 +113,7 @@ class Database:
                 SELECT t.id, t.name, t.project, MAX(s.started_at) AS last_used
                 FROM tasks t
                 JOIN sessions s ON s.task_id = t.id
+                WHERE t.hidden = 0
                 GROUP BY t.id
                 ORDER BY last_used DESC
                 LIMIT ?
@@ -113,6 +121,38 @@ class Database:
                 (limit,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def add_retroactive_session(self, task_name: str, project: str, duration_seconds: int) -> None:
+        """
+        Crée une session passée pour réaffecter du temps (ex : temps inactif).
+        started_at = maintenant - duration_seconds, ended_at = maintenant.
+        """
+        task_id    = self.get_or_create_task(task_name, project)
+        now        = datetime.now()
+        started_at = now - timedelta(seconds=duration_seconds)
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO sessions
+                    (task_id, started_at, ended_at, duration_seconds, is_active)
+                VALUES (?, ?, ?, ?, 0)
+                """,
+                (task_id, started_at.isoformat(), now.isoformat(), duration_seconds),
+            )
+
+    def hide_task(self, task_name: str) -> None:
+        """Masque une tâche du dropdown overlay (les sessions sont conservées)."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET hidden = 1 WHERE name = ?", (task_name,)
+            )
+
+    def unhide_task(self, task_name: str) -> None:
+        """Remet une tâche masquée dans la liste du dropdown."""
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE tasks SET hidden = 0 WHERE name = ?", (task_name,)
+            )
 
     # ------------------------------------------------------------------
     # Sessions
@@ -186,6 +226,41 @@ class Database:
             conn.execute(
                 "UPDATE sessions SET note = ? WHERE id = ?", (note, session_id)
             )
+
+    def get_history_sessions(self, days: int = 30) -> list[dict]:
+        """Retourne toutes les sessions des <days> derniers jours, du plus récent au plus vieux."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.id, t.name, t.project,
+                       s.started_at, s.ended_at,
+                       s.duration_seconds, s.is_active, s.note
+                FROM sessions s
+                JOIN tasks t ON t.id = s.task_id
+                WHERE s.started_at >= date('now', ? || ' days')
+                ORDER BY s.started_at DESC
+                """,
+                (f"-{days}",),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_task_recent_sessions(self, task_name: str, limit: int = 10) -> list[dict]:
+        """Retourne les <limit> sessions les plus récentes pour une tâche donnée."""
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT s.id, t.name, t.project,
+                       s.started_at, s.ended_at,
+                       s.duration_seconds, s.is_active, s.note
+                FROM sessions s
+                JOIN tasks t ON t.id = s.task_id
+                WHERE t.name = ?
+                ORDER BY s.started_at DESC
+                LIMIT ?
+                """,
+                (task_name, limit),
+            ).fetchall()
+            return [dict(r) for r in rows]
 
     def get_last_active_session(self) -> dict | None:
         """

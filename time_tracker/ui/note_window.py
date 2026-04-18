@@ -12,21 +12,24 @@ import tkinter as tk
 
 import customtkinter as ctk
 
-from .task_manager import TaskManager
+from ..core.task_manager import TaskManager
 
+from .icon import get_control_icons
+from .theme import (
+    TRANSPARENT  as _TRANSPARENT,
+    FRAME_BG     as _FRAME_BG,
+    DD_BG        as _DD_BG,
+    ITEM_BG      as _ITEM_BG,
+    ACCENT       as _ACCENT,
+    ACCENT_BTN   as _ACCENT_BTN,
+    ACCENT_HOVER as _ACCENT_HOVER,
+    BTN_HOVER    as _BTN_HOVER,
+    HANDLE_BG    as _HANDLE_BG,
+    TEXT         as _TEXT,
+    TEXT_DIM     as _TEXT_DIM,
+    WARNING      as _WARNING,
+)
 
-# Couleur clé rendue transparente par Windows → coins arrondis
-_TRANSPARENT = "#010101"
-
-# Palette sombre (identique à overlay.py)
-_FRAME_BG = "#262626"
-_ITEM_BG  = "#2e2e2e"
-_ACCENT   = "#3b82f6"
-_HANDLE   = "#3a3a3a"
-_TEXT     = "#e2e8f0"
-_TEXT_DIM = "#64748b"
-
-_WIDTH  = 300
 _HEIGHT = 150
 
 
@@ -51,11 +54,14 @@ class NoteWindow(tk.Toplevel):
         self.configure(bg=_TRANSPARENT)
         self.wm_attributes("-transparentcolor", _TRANSPARENT)
 
-        # Positionnée juste en dessous de l'overlay parent
+        # Positionnée juste en dessous de l'overlay parent, même largeur
         ox = parent.winfo_x()
         oy = parent.winfo_y()
+        ow = parent.winfo_width()
         oh = parent.winfo_height()
-        self.geometry(f"{_WIDTH}x{_HEIGHT}+{ox}+{oy + oh + 4}")
+        self.geometry(f"{ow}x{_HEIGHT}+{ox}+{oy + oh + 4}")
+
+        self._icons = get_control_icons(14)
 
         self._build_ui()
 
@@ -87,15 +93,17 @@ class NoteWindow(tk.Toplevel):
 
         ctk.CTkLabel(
             header,
-            text="📝  Note de session",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            image=self._icons["note"],
+            text="  Note de session",
+            compound="left",
+            font=ctk.CTkFont(size=14, weight="bold"),
             text_color=_TEXT,
         ).pack(side="left")
 
         ctk.CTkLabel(
             header,
             text="auto-sauvegardée",
-            font=ctk.CTkFont(size=10),
+            font=ctk.CTkFont(size=12),
             text_color=_TEXT_DIM,
         ).pack(side="right")
 
@@ -108,14 +116,14 @@ class NoteWindow(tk.Toplevel):
             border_width=1,
             corner_radius=6,
             wrap="word",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=14),
             scrollbar_button_color="#404040",
             scrollbar_button_hover_color="#505050",
         )
         self._text.pack(fill="both", expand=True, padx=10, pady=(0, 10))
 
         # Poignée de redimensionnement (coin bas-droite)
-        grip = tk.Frame(self._frame, width=14, height=14, cursor="size_nw_se", bg=_HANDLE)
+        grip = tk.Frame(self._frame, width=14, height=14, cursor="size_nw_se", bg=_HANDLE_BG)
         grip.place(relx=1.0, rely=1.0, anchor="se", x=-2, y=-2)
         grip.bind("<ButtonPress-1>", self._resize_start)
         grip.bind("<B1-Motion>", self._resize_motion)
@@ -177,6 +185,6 @@ class NoteWindow(tk.Toplevel):
         self._resize_h0 = self.winfo_height()
 
     def _resize_motion(self, event: tk.Event) -> None:
-        new_w = max(220, self._resize_w0 + event.x_root - self._resize_x0)
+        new_w = max(260, self._resize_w0 + event.x_root - self._resize_x0)
         new_h = max(120, self._resize_h0 + event.y_root - self._resize_y0)
         self.geometry(f"{new_w}x{new_h}")

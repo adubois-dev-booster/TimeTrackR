@@ -61,6 +61,8 @@ class Reminder:
 
     def _run_loop(self) -> None:
         """Vérifie toutes les 10 secondes si l'intervalle de rappel est atteint."""
+        last_task: str | None = None
+
         while True:
             time.sleep(10)
 
@@ -68,14 +70,22 @@ class Reminder:
                 continue
 
             if not self._timer_engine.is_running or self._timer_engine.is_paused:
+                # Réinitialise la détection de tâche pour la prochaine session
+                last_task = None
                 continue
 
-            elapsed = self._timer_engine.elapsed_seconds
+            task_name, _ = self._timer_engine.current_task
+            elapsed      = self._timer_engine.elapsed_seconds
 
-            # Combien d'intervalles complets ont été atteints depuis le dernier rappel ?
-            if elapsed > 0 and elapsed - self._last_reminder_at >= self._interval_seconds:
+            # Nouvelle tâche (ou reprise d'une tâche) : repartir de l'elapsed actuel
+            # pour ne pas déclencher immédiatement si elapsed > intervalle
+            if task_name != last_task:
+                last_task = task_name
                 self._last_reminder_at = elapsed
-                task_name, _ = self._timer_engine.current_task
+                continue
+
+            if elapsed - self._last_reminder_at >= self._interval_seconds:
+                self._last_reminder_at = elapsed
                 try:
                     self._callback(elapsed, task_name)
                 except Exception:
