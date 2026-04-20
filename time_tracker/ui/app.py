@@ -16,6 +16,7 @@ import customtkinter as ctk
 from ..core.database import Database
 from ..core.tag_utils import format_task_display, segment_text
 from .icon import apply_icon_to_window, get_app_icons, get_ctk_image
+from .theme import TAG_COLOR as _TAG_COLOR
 from ..core.task_manager import TaskManager
 from ..core.timer_engine import TimerEngine
 
@@ -388,7 +389,7 @@ class _TaskRow(tk.Frame):
         for seg, is_tag in segment_text(full_name):
             if not seg:
                 continue
-            lbl_fg = "#f97316" if is_tag else normal_fg
+            lbl_fg = _TAG_COLOR if is_tag else normal_fg
             font   = tag_font if is_tag else name_font
             padx   = ((0 if status_img else 8), 0) if first else (0, 0)
             lbl = tk.Label(self._hdr, text=seg, fg=lbl_fg, bg=bg, font=font)
@@ -773,9 +774,6 @@ class App(ctk.CTk):
     # Callbacks publics (main.py)
     # ------------------------------------------------------------------
 
-    def on_timer_tick(self, elapsed: int, task_name: str, project: str) -> None:
-        pass
-
     def _on_stop(self) -> None:
         self.after(0, self._refresh_history)
 
@@ -783,10 +781,7 @@ class App(ctk.CTk):
         self.show()
         self.after(200, self._request_start_task)
 
-    def _update_button_states(self, running: bool, paused: bool) -> None:
-        pass
-
-    def restore_running_state(self, task_name: str, project: str) -> None:
+    def restore_running_state(self) -> None:
         self.after(0, self._refresh_history)
 
     # ------------------------------------------------------------------

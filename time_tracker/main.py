@@ -142,7 +142,7 @@ class TimeTrackRApp:
                 self._task_manager.start_task(session["name"], session["project"])
             else:
                 self._task_manager.resume_last_session(session)
-            self._app.restore_running_state(session["name"], session["project"])
+            self._app.restore_running_state()
             self._overlay.notify_task_list_changed()
         else:
             self._task_manager.discard_last_session(session)
@@ -252,10 +252,6 @@ class TimeTrackRApp:
     def _on_tick_ui(self, elapsed: int, task_name: str, project: str) -> None:
         """Exécuté sur le thread principal : propage le tick vers l'UI."""
         try:
-            self._app.on_timer_tick(elapsed, task_name, project)
-        except Exception:
-            pass
-        try:
             self._overlay.on_timer_tick(elapsed, task_name, project)
         except Exception:
             pass
@@ -288,7 +284,6 @@ class TimeTrackRApp:
         """Même tâche → reprise simple."""
         self._task_manager.handle_idle_resume()
         self._idle_detector.reset()
-        self._app.after(0, lambda: self._app._update_button_states(running=True, paused=False))
 
     def _stop_from_idle(self) -> None:
         """Arrêt depuis la dialog d'inactivité."""
@@ -301,7 +296,6 @@ class TimeTrackRApp:
         """Continue sur une autre tâche : session A backdatée, session B depuis idle_start."""
         self._task_manager.handle_idle_switch_task(task_name, idle_seconds)
         self._idle_detector.reset()
-        self._app.after(0, lambda: self._app._update_button_states(running=True, paused=False))
         self._app.after(0, self._app._refresh_history)
         self._app.after(0, self._overlay.notify_task_list_changed)
 
@@ -309,7 +303,6 @@ class TimeTrackRApp:
         """Crédite l'inactivité sur task_name, puis reprend la tâche d'origine."""
         self._task_manager.handle_idle_credit_and_resume(task_name, idle_seconds)
         self._idle_detector.reset()
-        self._app.after(0, lambda: self._app._update_button_states(running=True, paused=False))
         self._app.after(0, self._app._refresh_history)
 
     def _on_reminder(self, elapsed: int, task_name: str) -> None:

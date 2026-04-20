@@ -72,6 +72,7 @@ from .theme import (
     TEXT         as _TEXT,
     TEXT_DIM     as _TEXT_DIM,
     WARNING      as _WARNING,
+    TAG_COLOR    as _TAG_COLOR,
 )
 
 
@@ -160,7 +161,7 @@ class _TaskDropdown(tk.Toplevel):
             for seg, is_tag in segment_text(value):
                 if not seg:
                     continue
-                fg   = "#f97316" if is_tag else _TEXT
+                fg   = _TAG_COLOR if is_tag else _TEXT
                 font = ("Segoe UI", 12, "italic") if is_tag else ("Segoe UI", 13)
                 lbl  = tk.Label(row, text=seg, fg=fg, bg=_DD_BG, font=font, cursor="hand2")
                 lbl.pack(side="left")
@@ -490,7 +491,7 @@ class Overlay(tk.Toplevel):
                 if is_tag:
                     lbl = tk.Label(
                         self._task_row, text=seg,
-                        fg="#f97316", bg=_FRAME_BG,
+                        fg=_TAG_COLOR, bg=_FRAME_BG,
                         font=("Segoe UI", 12, "italic"), cursor="hand2",
                     )
                 else:
@@ -539,7 +540,7 @@ class Overlay(tk.Toplevel):
         for seg, is_tag in segment_text(self._current_task_name):
             if not seg:
                 continue
-            color = "#f97316" if is_tag else _TEXT
+            color = _TAG_COLOR if is_tag else _TEXT
             font  = ("Segoe UI", 12, "italic") if is_tag else ("Segoe UI", 12)
             tk.Label(row, text=seg, fg=color, bg=_FRAME_BG, font=font).pack(
                 side="left", padx=(4 if first else 0, 0)

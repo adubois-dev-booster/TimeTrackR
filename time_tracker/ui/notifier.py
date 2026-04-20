@@ -29,6 +29,7 @@ from .theme import (
     TEXT         as _TEXT,
     TEXT_DIM     as _TEXT_DIM,
     WARNING      as _WARNING,
+    TAG_COLOR    as _TAG_COLOR,
 )
 
 # Sentinels du combo de l'IdleDialog
@@ -97,7 +98,7 @@ class _SimpleDropdown(tk.Toplevel):
             for seg, is_tag in segment_text(value):
                 if not seg:
                     continue
-                fg   = "#f97316" if is_tag else _TEXT
+                fg   = _TAG_COLOR if is_tag else _TEXT
                 font = ("Segoe UI", 12, "italic") if is_tag else ("Segoe UI", 13)
                 lbl  = tk.Label(row, text=seg, fg=fg, bg=_DD_BG, font=font, cursor="hand2")
                 lbl.pack(side="left")
@@ -413,7 +414,7 @@ class _IdleDialog(tk.Toplevel):
             for seg, is_tag in segment_text(task_name):
                 if not seg:
                     continue
-                fg   = "#f97316" if is_tag else normal_fg
+                fg   = _TAG_COLOR if is_tag else normal_fg
                 font = ("Segoe UI", 12, "italic") if is_tag else ("Segoe UI", 13)
                 lbl  = tk.Label(self._combo_row, text=seg, fg=fg, bg=_ITEM_BG,
                                 font=font, cursor="hand2")

@@ -33,6 +33,7 @@ TEXT_DIM     = "#64748b"   # texte secondaire / inactif / placeholders
 
 # ── Alertes ───────────────────────────────────────────────────────────
 WARNING      = "#f59e0b"   # amber — compteur d'inactivité
+TAG_COLOR    = "#f97316"   # orange — badges #tag inline
 
 """
 ══ TAILLES DE POLICE ══════════════════════════════════════════════════
