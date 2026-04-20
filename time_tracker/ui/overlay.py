@@ -7,11 +7,33 @@ Coins arrondis via wm_attributes("-transparentcolor").
 Menu déroulant custom (_TaskDropdown) pour garder exactement le même style dark.
 """
 
+import ctypes
+import ctypes.wintypes as _wt
 import tkinter as tk
 import tkinter.font as tkfont
 from typing import TYPE_CHECKING, Callable
 
 import customtkinter as ctk
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize",    _wt.DWORD),
+        ("rcMonitor", _wt.RECT),
+        ("rcWork",    _wt.RECT),
+        ("dwFlags",   _wt.DWORD),
+    ]
+
+def _monitor_work_area(x: int, y: int) -> _wt.RECT:
+    """Retourne la zone de travail (hors taskbar) du moniteur le plus proche de (x, y)."""
+    user32 = ctypes.windll.user32
+    user32.MonitorFromPoint.restype = ctypes.c_void_p
+    user32.MonitorFromPoint.argtypes = [_wt.POINT, _wt.DWORD]
+    hmon = user32.MonitorFromPoint(_wt.POINT(x, y), 2)  # MONITOR_DEFAULTTONEAREST
+    info = _MONITORINFO()
+    info.cbSize = ctypes.sizeof(_MONITORINFO)
+    user32.GetMonitorInfoW(ctypes.c_void_p(hmon), ctypes.byref(info))
+    return info.rcWork
 
 from ..core.database import Database
 from ..core.tag_utils import format_task_display, segment_text
@@ -29,6 +51,9 @@ _HEIGHT = 30
 # Seuil de collapse : en dessous → icône ▾ à la place du texte de tâche
 _COLLAPSE_W     = 320
 _COLLAPSE_MIN_W = 280   # largeur plancher (icône + timer + ▾ + boutons)
+
+# Largeur minimale visible quand l'overlay est poussé hors de l'écran (icône + marge)
+_MIN_VISIBLE = 40
 
 # Labels spéciaux
 _NEW_TASK_LABEL = "＋  Nouvelle tâche"
@@ -250,6 +275,7 @@ class Overlay(tk.Toplevel):
 
         ox = int(self._db.get_config("overlay_x", "100"))
         oy = int(self._db.get_config("overlay_y", "100"))
+        ox, oy = self._clamp_pos(ox, oy)
         self.geometry(f"{self._resize_w}x{_HEIGHT}+{ox}+{oy}")
         self.resizable(True, False)
         self.minsize(_COLLAPSE_MIN_W, _HEIGHT)
@@ -679,10 +705,19 @@ class Overlay(tk.Toplevel):
                 return
         self.geometry(f"+{event.x_root - self._drag_x}+{event.y_root - self._drag_y}")
 
+    def _clamp_pos(self, x: int, y: int) -> tuple[int, int]:
+        w = self.winfo_width()
+        r = _monitor_work_area(x + w // 2, y + _HEIGHT // 2)
+        cx = max(r.left - w + _MIN_VISIBLE, min(x, r.right  - _MIN_VISIBLE))
+        cy = max(r.top,                     min(y, r.bottom - _HEIGHT))
+        return cx, cy
+
     def _drag_end(self, event: tk.Event) -> None:
         if self._drag_active:
-            self._db.set_config("overlay_x", str(self.winfo_x()))
-            self._db.set_config("overlay_y", str(self.winfo_y()))
+            x, y = self._clamp_pos(self.winfo_x(), self.winfo_y())
+            self.geometry(f"+{x}+{y}")
+            self._db.set_config("overlay_x", str(x))
+            self._db.set_config("overlay_y", str(y))
         self._drag_active = False
 
     # ------------------------------------------------------------------

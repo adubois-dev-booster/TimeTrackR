@@ -5,6 +5,7 @@ Le fichier .db est stocké dans %APPDATA%/TimeTracker/timetracker.db
 
 import sqlite3
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -12,7 +13,9 @@ from pathlib import Path
 def get_db_path() -> Path:
     """Retourne le chemin vers le fichier SQLite, en créant le répertoire si besoin."""
     appdata = os.environ.get("APPDATA", Path.home())
-    db_dir = Path(appdata) / "TimeTracker"
+    # Base séparée quand lancé depuis l'exe PyInstaller
+    folder = "TimeTracker_test" if getattr(sys, "frozen", False) else "TimeTracker"
+    db_dir = Path(appdata) / folder
     db_dir.mkdir(parents=True, exist_ok=True)
     return db_dir / "timetracker.db"
 
