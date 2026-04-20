@@ -444,10 +444,17 @@ class Overlay(tk.Toplevel):
             content_w = 160
         bw = max(self.winfo_width(), content_w)
 
-        # Position X = bord gauche de l'overlay (coordonnées virtuelles multi-écran)
-        # On n'utilise pas winfo_screenwidth() qui retourne uniquement l'écran principal
+        # Hauteur estimée du dropdown (même formule que _TaskDropdown)
+        dd_h = len(values) * 32 + 10
+
+        # Position X = bord gauche de l'overlay
         bx = self.winfo_rootx()
-        by = (self._collapse_btn if self._collapsed else self._task_row).winfo_rooty() + _HEIGHT + 2
+        anchor_y = (self._collapse_btn if self._collapsed else self._task_row).winfo_rooty()
+        below_y  = anchor_y + _HEIGHT + 2
+        above_y  = anchor_y - dd_h - 2
+
+        work = _monitor_work_area(bx + bw // 2, below_y)
+        by = below_y if (work.bottom - below_y) >= dd_h else above_y
 
         self._dropdown = _TaskDropdown(
             self, values, self._on_task_selected, bx, by, bw,
