@@ -8,12 +8,13 @@ Menu déroulant custom (_TaskDropdown) pour garder exactement le même style dar
 """
 
 import tkinter as tk
+import tkinter.font as tkfont
 from typing import TYPE_CHECKING, Callable
 
 import customtkinter as ctk
 
 from ..core.database import Database
-from ..core.tag_utils import format_task_display
+from ..core.tag_utils import format_task_display, segment_text
 from .icon import get_ctk_image, get_control_icons
 from ..core.task_manager import TaskManager
 from ..core.timer_engine import TimerEngine
@@ -23,7 +24,11 @@ if TYPE_CHECKING:
 
 
 # Hauteur fixe de l'overlay en pixels
-_HEIGHT = 40
+_HEIGHT = 30
+
+# Seuil de collapse : en dessous → icône ▾ à la place du texte de tâche
+_COLLAPSE_W     = 320
+_COLLAPSE_MIN_W = 280   # largeur plancher (icône + timer + ▾ + boutons)
 
 # Labels spéciaux
 _NEW_TASK_LABEL = "＋  Nouvelle tâche"
@@ -92,8 +97,8 @@ class _TaskDropdown(tk.Toplevel):
 
         for value in values:
             is_special = value == _NEW_TASK_LABEL
-            if is_special or self._on_dismiss is None:
-                # Entrée spéciale : bouton pleine largeur, pas de ×
+
+            if is_special:
                 ctk.CTkButton(
                     self._frame,
                     text=value,
@@ -101,29 +106,18 @@ class _TaskDropdown(tk.Toplevel):
                     height=30,
                     fg_color="transparent",
                     hover_color=_BTN_HOVER,
-                    text_color=_TEXT_DIM if is_special else _TEXT,
+                    text_color=_TEXT_DIM,
                     font=ctk.CTkFont(size=14),
                     corner_radius=4,
                     command=lambda v=value: self._select(v),
                 ).pack(fill="x", padx=4, pady=1)
-            else:
-                # Ligne tâche : [nom ────────────] [×]
-                row = tk.Frame(self._frame, bg=_DD_BG)
-                row.pack(fill="x", padx=4, pady=1)
+                continue
 
-                ctk.CTkButton(
-                    row,
-                    text=value,
-                    anchor="w",
-                    height=30,
-                    fg_color="transparent",
-                    hover_color=_BTN_HOVER,
-                    text_color=_TEXT,
-                    font=ctk.CTkFont(size=14),
-                    corner_radius=4,
-                    command=lambda v=value: self._select(v),
-                ).pack(side="left", fill="x", expand=True)
+            # Ligne tâche : segments inline + [×]
+            row = tk.Frame(self._frame, bg=_DD_BG)
+            row.pack(fill="x", padx=4, pady=1)
 
+            if self._on_dismiss is not None:
                 ctk.CTkButton(
                     row,
                     text="×",
@@ -136,6 +130,43 @@ class _TaskDropdown(tk.Toplevel):
                     corner_radius=4,
                     command=lambda r=row, v=value: self._dismiss(r, v),
                 ).pack(side="right")
+
+            row_labels: list[tk.Widget] = [row]
+            for seg, is_tag in segment_text(value):
+                if not seg:
+                    continue
+                fg   = "#f97316" if is_tag else _TEXT
+                font = ("Segoe UI", 12, "italic") if is_tag else ("Segoe UI", 13)
+                lbl  = tk.Label(row, text=seg, fg=fg, bg=_DD_BG, font=font, cursor="hand2")
+                lbl.pack(side="left")
+                lbl.bind("<ButtonPress-1>", lambda e, v=value: self._select(v))
+                row_labels.append(lbl)
+
+            filler = tk.Label(row, text="", bg=_DD_BG)
+            filler.pack(side="left", fill="x", expand=True)
+            filler.bind("<ButtonPress-1>", lambda e, v=value: self._select(v))
+            row_labels.append(filler)
+
+            self._add_hover(row_labels)
+
+    @staticmethod
+    def _add_hover(widgets: list) -> None:
+        """Effet hover sur un groupe de widgets tk."""
+        def on_enter(e):
+            for w in widgets:
+                try:
+                    w.configure(bg=_BTN_HOVER)
+                except Exception:
+                    pass
+        def on_leave(e):
+            for w in widgets:
+                try:
+                    w.configure(bg=_DD_BG)
+                except Exception:
+                    pass
+        for w in widgets:
+            w.bind("<Enter>", on_enter, add=True)
+            w.bind("<Leave>", on_leave, add=True)
 
     def _select(self, value: str) -> None:
         self.destroy()
@@ -193,17 +224,22 @@ class Overlay(tk.Toplevel):
         self._on_stop_requested = on_stop_requested
 
         # État interne
-        self._drag_x = self._drag_y = 0
+        self._drag_x  = self._drag_y  = 0
+        self._drag_sx = self._drag_sy = 0
+        self._drag_active = False
         self._resize_x = 0
         self._resize_w = int(self._db.get_config("overlay_width", "340"))
-        self._current_task      = _IDLE_LABEL   # chaîne d'affichage (nom + tags)
-        self._current_task_name = ""            # nom brut seul (pour comparaison tick)
+        self._current_task      = _IDLE_LABEL   # chaîne d'affichage (= nom brut)
+        self._current_task_name = ""            # même valeur, pour comparaison tick
         self._task_map: dict[str, dict] = {}    # display_str → task dict
         self._note_win: "NoteWindow | None" = None
         self._dropdown: "_TaskDropdown | None" = None
         # Mémorise le dernier état connu pour éviter les configure() redondants
         self._ctrl_running = False
         self._ctrl_paused  = False
+        self._collapsed    = False
+        self._tooltip_id:  str | None = None
+        self._tooltip_win: tk.Toplevel | None = None
 
         # --- Configuration fenêtre ---
         self.withdraw()
@@ -216,12 +252,14 @@ class Overlay(tk.Toplevel):
         oy = int(self._db.get_config("overlay_y", "100"))
         self.geometry(f"{self._resize_w}x{_HEIGHT}+{ox}+{oy}")
         self.resizable(True, False)
-        self.minsize(200, _HEIGHT)
+        self.minsize(_COLLAPSE_MIN_W, _HEIGHT)
 
         self._icons = get_control_icons(14)
 
         self._build_ui()
         self._refresh_task_list()
+        if self._resize_w < _COLLAPSE_W:
+            self._set_collapsed(True)
         self.after(10, self.deiconify)
 
     # ------------------------------------------------------------------
@@ -238,9 +276,9 @@ class Overlay(tk.Toplevel):
             self._bg, image=icon_img, text="", width=28, cursor="hand2",
         )
         icon_lbl.pack(side="left", padx=(8, 2))
-        icon_lbl.bind("<ButtonPress-1>", self._drag_start)
-        icon_lbl.bind("<B1-Motion>",     self._drag_motion)
-        icon_lbl.bind("<ButtonRelease-1>", self._drag_end)
+        self.bind("<ButtonPress-1>",   self._drag_start)
+        self.bind("<B1-Motion>",       self._drag_motion)
+        self.bind("<ButtonRelease-1>", self._drag_end)
         icon_lbl._img = icon_img
 
         # ── Éléments droite (du plus à droite au plus à gauche) ──
@@ -249,9 +287,9 @@ class Overlay(tk.Toplevel):
         handle = tk.Frame(self._bg, width=6, cursor="size_we", bg=_HANDLE_BG)
         handle.pack(side="right", fill="y")
         handle.pack_propagate(False)
-        handle.bind("<ButtonPress-1>",   self._resize_start)
-        handle.bind("<B1-Motion>",       self._resize_motion)
-        handle.bind("<ButtonRelease-1>", self._resize_end)
+        handle.bind("<ButtonPress-1>",   lambda e: (self._resize_start(e), "break")[1])
+        handle.bind("<B1-Motion>",       lambda e: (self._resize_motion(e), "break")[1])
+        handle.bind("<ButtonRelease-1>", lambda e: (self._resize_end(e),   "break")[1])
 
         # Bouton note — icône Pillow, fond transparent
         self._note_btn = ctk.CTkButton(
@@ -299,26 +337,38 @@ class Overlay(tk.Toplevel):
             anchor="center",
             text_color=_TEXT,
         )
-        self._timer_lbl.pack(side="left", padx=(2, 4))
+        self._timer_lbl.pack(side="left", padx=(2, 0))
 
-        # ── Zone centrale : bouton tâche ↔ Entry nouvelle tâche ──
+        # ── Bouton collapse ▾ (remplace _center quand overlay trop étroit) ──
 
-        self._center = ctk.CTkFrame(self._bg, fg_color="transparent")
-        self._center.pack(side="left", fill="x", expand=True, padx=(0, 4))
-
-        # Bouton déclencheur du dropdown (texte courant, aucun cadre)
-        self._task_btn = ctk.CTkButton(
-            self._center,
-            text=_IDLE_LABEL,
-            anchor="w",
-            height=30,
+        self._collapse_btn = ctk.CTkButton(
+            self._bg,
+            text="", image=self._icons["collapse"],
+            width=24, height=_HEIGHT - 10,
             fg_color="transparent",
             hover_color=_BTN_HOVER,
-            text_color=_TEXT_DIM,
             corner_radius=6,
             command=self._open_dropdown,
         )
-        self._task_btn.pack(fill="x", expand=True)
+        self._collapse_btn.bind("<Enter>", self._schedule_tooltip)
+        self._collapse_btn.bind("<Leave>", self._cancel_tooltip)
+
+        # Filler transparent cliquable qui comble l'espace entre _collapse_btn et les boutons droite
+        self._collapse_filler = tk.Frame(self._bg, bg=_FRAME_BG, cursor="hand2")
+        self._collapse_filler.bind("<ButtonPress-1>", lambda e: self._open_dropdown())
+        self._collapse_filler.bind("<Enter>", self._schedule_tooltip)
+        self._collapse_filler.bind("<Leave>", self._cancel_tooltip)
+        # Non packés initialement — gérés par _set_collapsed
+
+        # ── Zone centrale : rangée tâche ↔ Entry nouvelle tâche ──
+
+        self._center = ctk.CTkFrame(self._bg, fg_color="transparent")
+        self._center.pack(side="left", fill="x", expand=True)
+
+        # Rangée nom avec segments inline (permutée avec l'entry en mode saisie)
+        self._task_row = tk.Frame(self._center, bg=_FRAME_BG)
+        self._task_row.pack(fill="x", expand=True)
+        # Remplie dynamiquement par _set_task_display
 
         # Entry saisie nouvelle tâche (masquée par défaut)
         self._new_task_entry = ctk.CTkEntry(
@@ -360,9 +410,18 @@ class Overlay(tk.Toplevel):
 
         values = [_NEW_TASK_LABEL] + display_items
 
-        bx = self._task_btn.winfo_rootx()
-        by = self._task_btn.winfo_rooty() + self._task_btn.winfo_height() + 2
-        bw = self._task_btn.winfo_width()
+        # Largeur : max(overlay, contenu le plus long)
+        try:
+            _f = tkfont.Font(family="Segoe UI", size=13)
+            content_w = max((_f.measure(v) + 80 for v in values), default=160)
+        except Exception:
+            content_w = 160
+        bw = max(self.winfo_width(), content_w)
+
+        # Position X = bord gauche de l'overlay (coordonnées virtuelles multi-écran)
+        # On n'utilise pas winfo_screenwidth() qui retourne uniquement l'écran principal
+        bx = self.winfo_rootx()
+        by = (self._collapse_btn if self._collapsed else self._task_row).winfo_rooty() + _HEIGHT + 2
 
         self._dropdown = _TaskDropdown(
             self, values, self._on_task_selected, bx, by, bw,
@@ -370,15 +429,96 @@ class Overlay(tk.Toplevel):
         )
 
     # ------------------------------------------------------------------
-    # Affichage de la tâche courante
+    # Affichage de la tâche courante (segments inline)
     # ------------------------------------------------------------------
 
     def _set_task_display(self, name: str, tags_str: str = "") -> None:
-        """Met à jour le texte du bouton-tâche."""
+        """Recrée les labels inline dans _task_row pour le nom de tâche."""
+        self._cancel_tooltip()
         self._current_task_name = name
-        display = format_task_display(name, tags_str) if name != _IDLE_LABEL else name
-        self._current_task = display
-        self._task_btn.configure(text=display)
+        self._current_task = name   # display = nom brut (tags inline)
+
+        for w in self._task_row.winfo_children():
+            w.destroy()
+
+        if name == _IDLE_LABEL:
+            lbl = tk.Label(
+                self._task_row, text=_IDLE_LABEL,
+                fg=_TEXT_DIM, bg=_FRAME_BG,
+                font=("Segoe UI", 13), cursor="hand2",
+            )
+            lbl.pack(side="left", padx=(8, 4))
+            lbl.bind("<ButtonPress-1>", lambda e: self._open_dropdown())
+        else:
+            first = True
+            for seg, is_tag in segment_text(name):
+                if not seg:
+                    continue
+                if is_tag:
+                    lbl = tk.Label(
+                        self._task_row, text=seg,
+                        fg="#f97316", bg=_FRAME_BG,
+                        font=("Segoe UI", 12, "italic"), cursor="hand2",
+                    )
+                else:
+                    lbl = tk.Label(
+                        self._task_row, text=seg,
+                        fg=_TEXT, bg=_FRAME_BG,
+                        font=("Segoe UI", 13), cursor="hand2",
+                    )
+                lbl.pack(side="left", padx=(8, 0) if first else (0, 0))
+                lbl.bind("<ButtonPress-1>", lambda e: self._open_dropdown())
+                first = False
+
+            # Filler pour que toute la zone soit cliquable
+            filler = tk.Label(self._task_row, text="", bg=_FRAME_BG, cursor="hand2")
+            filler.pack(side="left", fill="x", expand=True)
+            filler.bind("<ButtonPress-1>", lambda e: self._open_dropdown())
+
+    def _schedule_tooltip(self, event: tk.Event) -> None:
+        self._cancel_tooltip()
+        self._tooltip_id = self.after(300, self._show_tooltip)
+
+    def _cancel_tooltip(self, event=None) -> None:
+        if self._tooltip_id:
+            self.after_cancel(self._tooltip_id)
+            self._tooltip_id = None
+        if self._tooltip_win and self._tooltip_win.winfo_exists():
+            self._tooltip_win.destroy()
+            self._tooltip_win = None
+
+    def _show_tooltip(self) -> None:
+        if not self._current_task_name or self._current_task_name == _IDLE_LABEL:
+            return
+        win = tk.Toplevel(self)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=_TRANSPARENT)
+        win.wm_attributes("-transparentcolor", _TRANSPARENT)
+        self._tooltip_win = win
+
+        bg = ctk.CTkFrame(win, corner_radius=8, fg_color=_FRAME_BG)
+        bg.pack(padx=0, pady=0)
+
+        row = tk.Frame(bg, bg=_FRAME_BG)
+        row.pack(padx=10, pady=6)
+        first = True
+        for seg, is_tag in segment_text(self._current_task_name):
+            if not seg:
+                continue
+            color = "#f97316" if is_tag else _TEXT
+            font  = ("Segoe UI", 12, "italic") if is_tag else ("Segoe UI", 12)
+            tk.Label(row, text=seg, fg=color, bg=_FRAME_BG, font=font).pack(
+                side="left", padx=(4 if first else 0, 0)
+            )
+            first = False
+
+        win.update_idletasks()
+        tw = win.winfo_reqwidth()
+        th = win.winfo_reqheight()
+        ox, oy = self.winfo_x(), self.winfo_y()
+        ow = self.winfo_width()
+        win.geometry(f"+{ox + (ow - tw) // 2}+{oy - th - 4}")
 
     # ------------------------------------------------------------------
     # Boutons play/pause et stop
@@ -410,14 +550,12 @@ class Overlay(tk.Toplevel):
         if running:
             # Timer : gris quand en pause, blanc quand actif
             self._timer_lbl.configure(text_color=_TEXT_DIM if paused else _TEXT)
-            self._task_btn.configure(text_color=_TEXT)
             play_img = self._icons["play"] if paused else self._icons["pause"]
             self._play_btn.configure(image=play_img, state="normal")
             self._stop_btn.configure(image=self._icons["stop"], state="normal")
             self._note_btn.configure(image=self._icons["note"], state="normal")
         else:
             self._timer_lbl.configure(text_color=_TEXT)
-            self._task_btn.configure(text_color=_TEXT_DIM)
             self._play_btn.configure(image=self._icons["play_dim"], state="disabled")
             self._stop_btn.configure(image=self._icons["stop_dim"], state="disabled")
             self._note_btn.configure(image=self._icons["note_dim"], state="disabled")
@@ -439,14 +577,14 @@ class Overlay(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _show_entry_mode(self) -> None:
-        self._task_btn.pack_forget()
+        self._task_row.pack_forget()
         self._new_task_entry.pack(fill="x", expand=True)
         self._new_task_entry.delete(0, "end")
         self._new_task_entry.focus_set()
 
     def _show_task_mode(self) -> None:
         self._new_task_entry.pack_forget()
-        self._task_btn.pack(fill="x", expand=True)
+        self._task_row.pack(fill="x", expand=True)
 
     def _on_new_task_confirm(self, event=None) -> None:
         raw = self._new_task_entry.get().strip()
@@ -494,6 +632,7 @@ class Overlay(tk.Toplevel):
             )
         except ValueError:
             pass
+        self._refresh_task_list()
 
     # ------------------------------------------------------------------
     # Mise à jour depuis le thread timer
@@ -504,7 +643,8 @@ class Overlay(tk.Toplevel):
 
     def _update_display(self, elapsed: int, task_name: str) -> None:
         self._timer_lbl.configure(text=TimerEngine.format_elapsed(elapsed))
-        if self._current_task_name != task_name:
+        expected = format_task_display(task_name, self._timer.current_tags)
+        if self._current_task != expected:
             self._set_task_display(task_name, self._timer.current_tags)
         self._update_control_buttons(running=True, paused=False)
 
@@ -525,15 +665,25 @@ class Overlay(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _drag_start(self, event: tk.Event) -> None:
-        self._drag_x = event.x_root - self.winfo_x()
-        self._drag_y = event.y_root - self.winfo_y()
+        self._drag_x    = event.x_root - self.winfo_x()
+        self._drag_y    = event.y_root - self.winfo_y()
+        self._drag_sx   = event.x_root
+        self._drag_sy   = event.y_root
+        self._drag_active = False
 
     def _drag_motion(self, event: tk.Event) -> None:
+        if not self._drag_active:
+            if abs(event.x_root - self._drag_sx) > 5 or abs(event.y_root - self._drag_sy) > 5:
+                self._drag_active = True
+            else:
+                return
         self.geometry(f"+{event.x_root - self._drag_x}+{event.y_root - self._drag_y}")
 
     def _drag_end(self, event: tk.Event) -> None:
-        self._db.set_config("overlay_x", str(self.winfo_x()))
-        self._db.set_config("overlay_y", str(self.winfo_y()))
+        if self._drag_active:
+            self._db.set_config("overlay_x", str(self.winfo_x()))
+            self._db.set_config("overlay_y", str(self.winfo_y()))
+        self._drag_active = False
 
     # ------------------------------------------------------------------
     # Resize
@@ -543,9 +693,26 @@ class Overlay(tk.Toplevel):
         self._resize_x = event.x_root
         self._resize_w = self.winfo_width()
 
+    def _set_collapsed(self, collapsed: bool) -> None:
+        """Bascule entre mode texte tâche et icône ▾ selon la largeur."""
+        self._collapsed = collapsed
+        if collapsed:
+            if self._new_task_entry.winfo_ismapped():
+                self._show_task_mode()
+            self._center.pack_forget()
+            self._collapse_btn.pack(side="left")
+            self._collapse_filler.pack(side="left", fill="x", expand=True)
+        else:
+            self._collapse_btn.pack_forget()
+            self._collapse_filler.pack_forget()
+            self._center.pack(side="left", fill="x", expand=True)
+
     def _resize_motion(self, event: tk.Event) -> None:
-        new_w = max(200, self._resize_w + event.x_root - self._resize_x)
+        new_w = max(_COLLAPSE_MIN_W, self._resize_w + event.x_root - self._resize_x)
         self.geometry(f"{new_w}x{_HEIGHT}")
+        should_collapse = new_w < _COLLAPSE_W
+        if should_collapse != self._collapsed:
+            self._set_collapsed(should_collapse)
 
     def _resize_end(self, event: tk.Event) -> None:
         self._db.set_config("overlay_width", str(self.winfo_width()))

@@ -14,6 +14,7 @@ from typing import Callable
 
 import customtkinter as ctk
 
+from ..core.tag_utils import segment_text
 
 from .theme import (
     TRANSPARENT  as _TRANSPARENT,
@@ -31,7 +32,7 @@ from .theme import (
 )
 
 # Sentinels du combo de l'IdleDialog
-_NO_TASK       = "— aucune tâche —"
+_NO_TASK        = "— aucune tâche —"
 _NEW_TASK_LABEL = "＋  Nouvelle tâche"
 
 
@@ -79,18 +80,53 @@ class _SimpleDropdown(tk.Toplevel):
         frame.pack(fill="both", expand=True)
         for value in values:
             is_dim = value in (_NO_TASK, _NEW_TASK_LABEL)
-            ctk.CTkButton(
-                frame,
-                text=value,
-                anchor="w",
-                height=self._ROW_H,
-                fg_color="transparent",
-                hover_color=_BTN_HOVER,
-                text_color=_TEXT_DIM if is_dim else _TEXT,
-                font=ctk.CTkFont(size=13),
-                corner_radius=4,
-                command=lambda v=value: self._select(v),
-            ).pack(fill="x", padx=4, pady=1)
+
+            if is_dim:
+                ctk.CTkButton(
+                    frame, text=value, anchor="w", height=self._ROW_H,
+                    fg_color="transparent", hover_color=_BTN_HOVER,
+                    text_color=_TEXT_DIM, font=ctk.CTkFont(size=13), corner_radius=4,
+                    command=lambda v=value: self._select(v),
+                ).pack(fill="x", padx=4, pady=1)
+                continue
+
+            row = tk.Frame(frame, bg=_DD_BG)
+            row.pack(fill="x", padx=4, pady=1)
+
+            row_labels: list[tk.Widget] = [row]
+            for seg, is_tag in segment_text(value):
+                if not seg:
+                    continue
+                fg   = "#f97316" if is_tag else _TEXT
+                font = ("Segoe UI", 12, "italic") if is_tag else ("Segoe UI", 13)
+                lbl  = tk.Label(row, text=seg, fg=fg, bg=_DD_BG, font=font, cursor="hand2")
+                lbl.pack(side="left")
+                lbl.bind("<ButtonPress-1>", lambda e, v=value: self._select(v))
+                row_labels.append(lbl)
+
+            filler = tk.Label(row, text="", bg=_DD_BG)
+            filler.pack(side="left", fill="x", expand=True)
+            filler.bind("<ButtonPress-1>", lambda e, v=value: self._select(v))
+            row_labels.append(filler)
+            self._add_hover(row_labels)
+
+    @staticmethod
+    def _add_hover(widgets: list) -> None:
+        def on_enter(e):
+            for w in widgets:
+                try:
+                    w.configure(bg=_BTN_HOVER)
+                except Exception:
+                    pass
+        def on_leave(e):
+            for w in widgets:
+                try:
+                    w.configure(bg=_DD_BG)
+                except Exception:
+                    pass
+        for w in widgets:
+            w.bind("<Enter>", on_enter, add=True)
+            w.bind("<Leave>", on_leave, add=True)
 
     def _select(self, value: str) -> None:
         self.destroy()
@@ -226,7 +262,7 @@ class _IdleDialog(tk.Toplevel):
         original_task: str = "",
         recent_tasks: list | None = None,
         on_other_continue: Callable | None = None,
-        on_other_resume_old: Callable | None = None,   # crédit inactivité + reprise tâche d'origine
+        on_other_resume_old: Callable | None = None,
     ):
         super().__init__(parent)
         self._on_resume          = on_resume
@@ -236,7 +272,6 @@ class _IdleDialog(tk.Toplevel):
         self._original_task      = original_task
         self._idle_total         = int(idle_seconds)
 
-        # Valeurs du combo : tâche d'origine, <aucune tâche>, autres tâches, + nouvelle tâche
         others = [t for t in (recent_tasks or []) if t != original_task]
         base = ([original_task, _NO_TASK] + others) if original_task else ([_NO_TASK] + others)
         self._combo_values = base + [_NEW_TASK_LABEL]
@@ -266,7 +301,6 @@ class _IdleDialog(tk.Toplevel):
         frame = ctk.CTkFrame(self, corner_radius=12, fg_color=_FRAME_BG)
         frame.pack(fill="both", expand=True)
 
-        # Titre ──────────────────────────────────────────────────────
         ctk.CTkLabel(
             frame,
             text="⏸  Inactivité détectée",
@@ -274,7 +308,6 @@ class _IdleDialog(tk.Toplevel):
             text_color=_TEXT,
         ).pack(pady=(22, 4))
 
-        # Compteur live ──────────────────────────────────────────────
         self._timer_lbl = ctk.CTkLabel(
             frame,
             text=self._fmt(self._idle_total),
@@ -283,10 +316,8 @@ class _IdleDialog(tk.Toplevel):
         )
         self._timer_lbl.pack(pady=(0, 16))
 
-        # Séparateur ─────────────────────────────────────────────────
         ctk.CTkFrame(frame, height=1, fg_color=_HANDLE_BG).pack(fill="x", padx=24, pady=(0, 16))
 
-        # Combo « Vous étiez sur » ───────────────────────────────────
         ctk.CTkLabel(
             frame,
             text="Vous étiez sur :",
@@ -295,27 +326,20 @@ class _IdleDialog(tk.Toplevel):
             anchor="w",
         ).pack(anchor="w", padx=24, pady=(0, 4))
 
-        # Conteneur partagé par le bouton-combo et l'entry "nouvelle tâche"
+        # Conteneur partagé par le combo-row et l'entry "nouvelle tâche"
         self._combo_wrap = ctk.CTkFrame(frame, fg_color="transparent")
         self._combo_wrap.pack(fill="x", padx=24, pady=(0, 20))
 
-        init_text  = self._original_task or _NO_TASK
-        init_color = _TEXT if self._original_task else _TEXT_DIM
-        self._combo_btn = ctk.CTkButton(
+        # Rangée combo : tk.Frame avec bordure simulée + labels inline
+        self._combo_row = tk.Frame(
             self._combo_wrap,
-            text=init_text,
-            anchor="w",
-            height=32,
-            fg_color=_ITEM_BG,
-            hover_color=_BTN_HOVER,
-            border_color=_ACCENT,
-            border_width=1,
-            text_color=init_color,
-            font=ctk.CTkFont(size=13),
-            corner_radius=6,
-            command=self._open_dropdown,
+            bg=_ITEM_BG,
+            highlightbackground=_ACCENT,
+            highlightthickness=1,
+            cursor="hand2",
         )
-        self._combo_btn.pack(fill="x")
+        self._combo_row.pack(fill="x")
+        self._render_combo_task(self._original_task or _NO_TASK, bool(self._original_task))
 
         self._new_task_entry = ctk.CTkEntry(
             self._combo_wrap,
@@ -332,11 +356,10 @@ class _IdleDialog(tk.Toplevel):
         self._new_task_entry.bind("<Return>", self._on_new_task_confirm)
         self._new_task_entry.bind("<Escape>", self._on_new_task_cancel)
 
-        # Boutons ────────────────────────────────────────────────────
+        # Boutons
         btns = ctk.CTkFrame(frame, fg_color="transparent")
         btns.pack(fill="x", padx=24, pady=(0, 24))
 
-        # Bouton d'action principal (texte dynamique)
         task_short = _truncate(self._original_task, 22)
         self._action_btn = ctk.CTkButton(
             btns,
@@ -347,7 +370,6 @@ class _IdleDialog(tk.Toplevel):
         )
         self._action_btn.pack(fill="x", pady=(0, 6))
 
-        # Bouton "Reprendre tâche d'origine" — visible uniquement quand combo = autre tâche
         self._resume_orig_btn = ctk.CTkButton(
             btns,
             text=f"Reprendre « {task_short} »",
@@ -357,9 +379,7 @@ class _IdleDialog(tk.Toplevel):
             hover_color=_BTN_HOVER, text_color=_TEXT,
             command=self._do_resume_original,
         )
-        # Non packé au départ — affiché dynamiquement par _on_combo_changed
 
-        # Arrêter (secondaire)
         ctk.CTkButton(
             btns,
             text="Arrêter la session",
@@ -371,55 +391,85 @@ class _IdleDialog(tk.Toplevel):
         ).pack(fill="x")
 
     # ------------------------------------------------------------------
+    # Rendu inline du combo sélectionné
+    # ------------------------------------------------------------------
+
+    def _render_combo_task(self, task_name: str, is_active: bool) -> None:
+        """Recrée les labels inline dans _combo_row pour la tâche sélectionnée."""
+        for w in self._combo_row.winfo_children():
+            w.destroy()
+
+        if task_name in (_NO_TASK, _NEW_TASK_LABEL):
+            lbl = tk.Label(
+                self._combo_row, text=task_name,
+                fg=_TEXT_DIM, bg=_ITEM_BG,
+                font=("Segoe UI", 13), cursor="hand2",
+            )
+            lbl.pack(side="left", padx=(8, 4), pady=6)
+            lbl.bind("<ButtonPress-1>", lambda e: self._open_dropdown())
+        else:
+            normal_fg = _TEXT if is_active else _TEXT_DIM
+            first = True
+            for seg, is_tag in segment_text(task_name):
+                if not seg:
+                    continue
+                fg   = "#f97316" if is_tag else normal_fg
+                font = ("Segoe UI", 12, "italic") if is_tag else ("Segoe UI", 13)
+                lbl  = tk.Label(self._combo_row, text=seg, fg=fg, bg=_ITEM_BG,
+                                font=font, cursor="hand2")
+                lbl.pack(side="left", padx=(8 if first else 0, 0), pady=6)
+                lbl.bind("<ButtonPress-1>", lambda e: self._open_dropdown())
+                first = False
+
+        filler = tk.Label(self._combo_row, text="", bg=_ITEM_BG, cursor="hand2")
+        filler.pack(side="left", fill="x", expand=True)
+        filler.bind("<ButtonPress-1>", lambda e: self._open_dropdown())
+
+    # ------------------------------------------------------------------
     # Dropdown custom
     # ------------------------------------------------------------------
 
     def _open_dropdown(self) -> None:
-        """Ouvre le popup de sélection, ou le ferme s'il est déjà visible (toggle)."""
         if self._dropdown is not None and self._dropdown.winfo_exists():
             self._dropdown.destroy()
             self._dropdown = None
             return
-        x = self._combo_btn.winfo_rootx()
-        y = self._combo_btn.winfo_rooty() + self._combo_btn.winfo_height() + 2
-        w = self._combo_btn.winfo_width()
+        x = self._combo_row.winfo_rootx()
+        y = self._combo_row.winfo_rooty() + self._combo_row.winfo_height() + 2
+        w = self._combo_row.winfo_width()
         self._dropdown = _SimpleDropdown(
             self, self._combo_values, self._on_task_selected, x, y, w
         )
 
     def _on_task_selected(self, value: str) -> None:
-        """Met à jour le bouton-combo et déclenche la mise à jour de l'action via StringVar."""
         self._dropdown = None
         if value == _NEW_TASK_LABEL:
             self._show_entry_mode()
             return
-        self._combo_btn.configure(
-            text=value,
-            text_color=_TEXT_DIM if value == _NO_TASK else _TEXT,
-        )
-        self._task_var.set(value)   # → _on_combo_changed → met à jour _action_btn
+        self._render_combo_task(value, value != _NO_TASK)
+        self._task_var.set(value)
 
     # ------------------------------------------------------------------
     # Mode saisie nouvelle tâche
     # ------------------------------------------------------------------
 
     def _show_entry_mode(self) -> None:
-        self._combo_btn.pack_forget()
+        self._combo_row.pack_forget()
         self._new_task_entry.delete(0, "end")
         self._new_task_entry.pack(fill="x")
         self._new_task_entry.focus_set()
 
     def _show_combo_mode(self) -> None:
         self._new_task_entry.pack_forget()
-        self._combo_btn.pack(fill="x")
+        self._combo_row.pack(fill="x")
 
     def _on_new_task_confirm(self, event=None) -> None:
         name = self._new_task_entry.get().strip()
         self._show_combo_mode()
         if not name:
             return
-        self._combo_btn.configure(text=name, text_color=_TEXT)
-        self._task_var.set(name)    # → _on_combo_changed → met à jour _action_btn
+        self._render_combo_task(name, True)
+        self._task_var.set(name)
 
     def _on_new_task_cancel(self, event=None) -> None:
         self._show_combo_mode()
@@ -429,11 +479,11 @@ class _IdleDialog(tk.Toplevel):
     # ------------------------------------------------------------------
 
     def _on_combo_changed(self, *_args) -> None:
-        task_name    = self._task_var.get().strip()
+        task_name = self._task_var.get().strip()
         if task_name == _NEW_TASK_LABEL:
-            return  # géré par _show_entry_mode
-        orig_short   = _truncate(self._original_task, 22)
-        is_other     = task_name and task_name != _NO_TASK and task_name != self._original_task
+            return
+        orig_short = _truncate(self._original_task, 22)
+        is_other   = task_name and task_name != _NO_TASK and task_name != self._original_task
 
         if is_other:
             self._action_btn.configure(text=f"Continuer sur « {_truncate(task_name, 22)} »")
@@ -446,7 +496,6 @@ class _IdleDialog(tk.Toplevel):
             self._set_height(self._H)
 
     def _set_height(self, h: int) -> None:
-        """Redimensionne la fenêtre en gardant le centre de l'écran."""
         sw = self.winfo_screenwidth()
         sh = self.winfo_screenheight()
         x  = (sw - self._W) // 2
@@ -460,29 +509,25 @@ class _IdleDialog(tk.Toplevel):
     def _do_action(self) -> None:
         task_name = self._task_var.get().strip()
         if not task_name or task_name == _NEW_TASK_LABEL:
-            return  # saisie non confirmée, on n'agit pas
+            return
         self.destroy()
         if task_name == _NO_TASK:
-            # Pause / repas → reprise simple, inactivité non créditée
             self._on_resume()
         elif task_name == self._original_task:
-            # Tâche d'origine → crédit de l'inactivité sur la tâche + reprise
             if self._on_other_resume_old:
                 self._on_other_resume_old(task_name, self._idle_total)
             else:
                 self._on_resume()
         else:
-            # Autre tâche → crédit de l'inactivité sur YYY + switch
             if self._on_other_continue:
                 self._on_other_continue(task_name, self._idle_total)
             else:
                 self._on_resume()
 
     def _do_resume_original(self) -> None:
-        """Crédite l'inactivité sur la tâche sélectionnée, puis reprend la tâche d'origine."""
         task_name = self._task_var.get().strip()
         if not task_name or task_name == _NEW_TASK_LABEL:
-            return  # saisie non confirmée
+            return
         self.destroy()
         if task_name and task_name != _NO_TASK and task_name != self._original_task:
             if self._on_other_resume_old:

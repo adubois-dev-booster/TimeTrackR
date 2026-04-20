@@ -8,13 +8,13 @@ from __future__ import annotations
 
 import tkinter as tk
 import tkinter.ttk as ttk
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Callable
 
 import customtkinter as ctk
 
 from ..core.database import Database
-from ..core.tag_utils import format_task_display, str_to_tags
+from ..core.tag_utils import format_task_display, segment_text
 from .icon import apply_icon_to_window, get_app_icons, get_ctk_image
 from ..core.task_manager import TaskManager
 from ..core.timer_engine import TimerEngine
@@ -36,10 +36,6 @@ _PAD_SESSION = (12, 4)
 # Bg de la TaskRow (doit correspondre à fg_color=("gray84","gray22"))
 _ROW_BG  = {"Dark": "#383838", "Light": "#D6D6D6"}
 _DAY_BG  = {"Dark": "#1e1e1e", "Light": "#ebebeb"}
-
-# Badges tags
-_TAG_BG  = ("#dbeafe", "#1e3a5f")   # fond du badge (clair / sombre)
-_TAG_FG  = ("#1d4ed8", "#93c5fd")   # texte du badge
 
 
 # ── Utilitaires ───────────────────────────────────────────────────────
@@ -279,8 +275,18 @@ class _SessionRow(tk.Frame):
             end_text = "en cours"
             end_fg   = c["active"]
         else:
-            end_text = _format_time(session["ended_at"])
-            end_fg   = c["fg"]
+            if session["ended_at"]:
+                end_text = _format_time(session["ended_at"])
+            else:
+                # Estimation depuis started_at + duration (session non fermée proprement)
+                try:
+                    dt_end = datetime.fromisoformat(session["started_at"]) + timedelta(
+                        seconds=session["duration_seconds"]
+                    )
+                    end_text = dt_end.strftime("%Hh%M")
+                except (ValueError, TypeError):
+                    end_text = "–"
+            end_fg = c["fg"]
 
         tk.Label(
             self, text=f"{start} → {end_text}",
@@ -357,7 +363,7 @@ class _TaskRow(tk.Frame):
             font=ctk.CTkFont(size=_FONT_TASK),
         ).pack(side="right", padx=(0, 8), pady=4)
 
-        # Icône statut + nom
+        # Icône statut + nom (segments inline avec tags colorés)
         if status == "running":
             status_img, fg, weight = icons["row_running"], ("#22c55e", "#4ade80"), "bold"
         elif status == "paused":
@@ -365,38 +371,35 @@ class _TaskRow(tk.Frame):
         else:
             status_img, fg, weight = None,                 ("gray10", "gray90"),   "normal"
 
+        mode = ctk.get_appearance_mode()
+        normal_fg = fg[0] if mode == "Light" else fg[1]
+        name_font = ("Segoe UI", _FONT_TASK, "bold") if weight == "bold" else ("Segoe UI", _FONT_TASK)
+        tag_font  = ("Segoe UI", _FONT_TASK - 2, "italic")
+
+        if status_img:
+            ctk.CTkLabel(self._hdr, image=status_img, text="", width=16).pack(
+                side="left", padx=(8, 0), pady=4
+            )
+
         proj_suffix = f"  [{project}]" if project else ""
-        name_text   = f"  {task_name}{proj_suffix}" if status_img else f"{task_name}{proj_suffix}"
-        self._name_lbl = ctk.CTkLabel(
-            self._hdr,
-            image=status_img,
-            text=name_text,
-            compound="left",
-            anchor="w",
-            font=ctk.CTkFont(size=_FONT_TASK, weight=weight),
-            text_color=fg,
-        )
-        self._name_lbl.pack(side="left", padx=(8, 4), pady=4)
+        full_name   = task_name + proj_suffix
+        first = True
+        name_labels: list[tk.Widget] = []
+        for seg, is_tag in segment_text(full_name):
+            if not seg:
+                continue
+            lbl_fg = "#f97316" if is_tag else normal_fg
+            font   = tag_font if is_tag else name_font
+            padx   = ((0 if status_img else 8), 0) if first else (0, 0)
+            lbl = tk.Label(self._hdr, text=seg, fg=lbl_fg, bg=bg, font=font)
+            lbl.pack(side="left", padx=padx, pady=4)
+            lbl.bind("<ButtonPress-1>", self._on_row_click)
+            lbl.bind("<Double-Button-1>", lambda e: self._on_start(task_name, project, tags))
+            name_labels.append(lbl)
+            first = False
 
-        # Badges tags
-        for tag in str_to_tags(tags):
-            ctk.CTkLabel(
-                self._hdr,
-                text=f"#{tag}",
-                font=ctk.CTkFont(size=11),
-                fg_color=_TAG_BG,
-                text_color=_TAG_FG,
-                corner_radius=4,
-                width=0,
-            ).pack(side="left", padx=(0, 4), pady=4, ipady=1)
-
-        # Clic simple → toggle ; double-clic → démarrer
+        # Clic simple → toggle sur l'en-tête (zone vide)
         self._hdr.bind("<ButtonPress-1>", self._on_row_click)
-        self._name_lbl.bind("<ButtonPress-1>", self._on_row_click)
-        self._name_lbl.bind(
-            "<Double-Button-1>",
-            lambda e: self._on_start(task_name, project, tags),
-        )
 
     # ── Clic ──────────────────────────────────────────────────────────
 

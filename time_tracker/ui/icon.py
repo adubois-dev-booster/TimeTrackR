@@ -178,14 +178,16 @@ def get_control_icons(size: int = 14) -> dict[str, ctk.CTkImage]:
         return ctk.CTkImage(light_image=img, dark_image=img, size=(size, size))
 
     return {
-        "play":      _mk(_create_play_img,  _TEXT),
-        "play_dim":  _mk(_create_play_img,  _TEXT_DIM),
-        "pause":     _mk(_create_pause_img, _TEXT),
-        "pause_dim": _mk(_create_pause_img, _TEXT_DIM),
-        "stop":      _mk(_create_stop_img,  _TEXT),
-        "stop_dim":  _mk(_create_stop_img,  _TEXT_DIM),
-        "note":      _mk(_create_note_img,  _TEXT),
-        "note_dim":  _mk(_create_note_img,  _TEXT_DIM),
+        "play":         _mk(_create_play_img,         _TEXT),
+        "play_dim":     _mk(_create_play_img,         _TEXT_DIM),
+        "pause":        _mk(_create_pause_img,        _TEXT),
+        "pause_dim":    _mk(_create_pause_img,        _TEXT_DIM),
+        "stop":         _mk(_create_stop_img,         _TEXT),
+        "stop_dim":     _mk(_create_stop_img,         _TEXT_DIM),
+        "note":         _mk(_create_note_img,         _TEXT),
+        "note_dim":     _mk(_create_note_img,         _TEXT_DIM),
+        "collapse":     _mk(_create_chevron_down_img, _TEXT),
+        "collapse_dim": _mk(_create_chevron_down_img, _TEXT_DIM),
     }
 
 

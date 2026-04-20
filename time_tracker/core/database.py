@@ -86,6 +86,18 @@ class Database:
                 )
             except sqlite3.OperationalError:
                 pass
+            # v5 : tags inline dans le nom (migration ancien format "nom" + tags="t1,t2")
+            try:
+                conn.execute(
+                    """
+                    UPDATE tasks
+                    SET name = name || '  #' || REPLACE(tags, ',', '  #')
+                    WHERE tags != ''
+                    AND name NOT LIKE '%#%'
+                    """
+                )
+            except sqlite3.OperationalError:
+                pass
 
     # ------------------------------------------------------------------
     # Tâches

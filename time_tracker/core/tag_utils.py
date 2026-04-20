@@ -1,6 +1,7 @@
 """
 Utilitaires pour le parsing et l'affichage des tags de tâches.
-Un tag est un mot préfixé par # dans la saisie : "#monclient faire le site".
+Un tag est un mot préfixé par # dans la saisie : "test #client ma tache".
+Le nom est stocké tel quel (tags inline) ; les tags sont extraits pour indexation.
 """
 
 import re
@@ -8,12 +9,30 @@ import re
 
 def parse_task_input(raw: str) -> tuple[str, list[str]]:
     """
-    Extrait les #tags et retourne (nom_nettoyé, tags_triés_lowercase).
-    "#monclient faire le site #web" → ("faire le site", ["monclient", "web"])
+    Extrait les #tags pour indexation, retourne (nom_brut, tags_triés_lowercase).
+    Le nom conserve les tags dans leur position originale.
+    "test #client ma tache" → ("test #client ma tache", ["client"])
+    "#monclient faire le site" → ("#monclient faire le site", ["monclient"])
     """
     tags = sorted(set(t.lower() for t in re.findall(r"#(\w+)", raw)))
-    name = re.sub(r"\s*#\w+", "", raw).strip()
-    return name, tags
+    return raw.strip(), tags
+
+
+def segment_text(text: str) -> list[tuple[str, bool]]:
+    """
+    Découpe un nom de tâche en segments (texte, is_tag) pour rendu inline.
+    "test #client ma tache" → [("test ", False), ("#client", True), (" ma tache", False)]
+    """
+    parts: list[tuple[str, bool]] = []
+    last = 0
+    for m in re.finditer(r"#\w+", text):
+        if m.start() > last:
+            parts.append((text[last:m.start()], False))
+        parts.append((m.group(), True))
+        last = m.end()
+    if last < len(text):
+        parts.append((text[last:], False))
+    return parts or [("", False)]
 
 
 def tags_to_str(tags: list[str]) -> str:
@@ -27,21 +46,14 @@ def str_to_tags(tags_str: str) -> list[str]:
 
 
 def format_task_display(name: str, tags_str: str) -> str:
-    """
-    Formate nom + tags pour l'affichage.
-    "faire le site", "monclient,web" → "faire le site [monclient] [web]"
-    """
-    if not tags_str:
-        return name
-    badges = "  ".join(f"[{t}]" for t in str_to_tags(tags_str))
-    return f"{name}  {badges}"
+    """Le nom inclut désormais les tags inline — retourne le nom tel quel."""
+    return name
 
 
 def display_to_name_tags(display: str) -> tuple[str, str]:
     """
-    Inverse de format_task_display : extrait (nom, tags_str) depuis une chaîne d'affichage.
-    "faire le site  [monclient] [web]" → ("faire le site", "monclient,web")
+    Le display est le nom brut (tags inline).
+    Extrait les tags pour retrouver la clé de recherche en base.
     """
-    found = re.findall(r"\[(\w+)\]", display)
-    name  = re.sub(r"\s+\[\w+\]", "", display).strip()
-    return name, tags_to_str(found)
+    tags = tags_to_str(sorted(set(t.lower() for t in re.findall(r"#(\w+)", display))))
+    return display, tags
